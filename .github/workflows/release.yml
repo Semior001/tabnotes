@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+
+# a git ref can hold $(...), so the tag reaches shell only through this variable
+env:
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  guard:
+    # "Re-run failed jobs" does not re-run a guard that passed, so release repeats this if
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check the tag format
+        run: |
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo '::error::the tag is not a strict vX.Y.Z'
+            exit 1
+          fi
+      # fetch-depth 0 also fetches every branch, which is what provides origin/main:
+      # the guard runs no git fetch, and has no credentials for one
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check the tagged commit is on main
+        run: |
+          if ! git merge-base --is-ancestor "refs/tags/$TAG^{commit}" origin/main; then
+            echo '::error::the tagged commit is not on main'
+            exit 1
+          fi
+      # fetch-depth 0 fetches the tags too, this one included, so a strict tag can only be the top
+      # of the list if it is above all others; a typo must not run through signing
+      - name: Check the tag is the highest version
+        run: |
+          top=$(git tag --list | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
+          if [ "$top" != "$TAG" ]; then
+            echo "::error::the tag is not above $top"
+            exit 1
+          fi
+
+  release:
+    needs: guard
+    if: github.actor == github.repository_owner && github.triggering_actor == github.repository_owner
+    runs-on: ubuntu-24.04
+    environment: release
+    # above web-ext's own limits, 5 minutes of validation and 15 of approval
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # no npm cache here: a restored cache would write into the job holding the AMO credentials.
+      # The upload uuid below is the one accepted exception (docs/DEVELOPMENT.md, Known limitations). The
+      # explicit false is because setup-node caches by itself once package.json has packageManager
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.13.0
+          package-manager-cache: false
+      - uses: go-task/setup-task@a00fbb05ce67b35648be3c78cbc9fd85354c757e # v2.2.0
+        with:
+          version: 3.47.0
+      - run: npm ci
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist/.amo-upload-uuid
+          key: amo-upload-uuid-${{ env.TAG }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: amo-upload-uuid-${{ env.TAG }}-
+      - name: Sign on AMO
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+        run: RELEASE_VERSION="${TAG#v}" task sign
+      # AMO cannot sign a version again, so the xpi must outlive the runner before anything else can fail
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signed-xpi
+          path: web-ext-artifacts/*.xpi
+          if-no-files-found: error
+      # a cache key is immutable, hence the run id and attempt in it
+      - if: always() && hashFiles('dist/.amo-upload-uuid') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: dist/.amo-upload-uuid
+          key: amo-upload-uuid-${{ env.TAG }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: List merged PRs and releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # with commits, 50 or more is over GitHub's 500,000 node limit and fails; an older PR just shows as commits
+          gh pr list --state merged --base main --limit 40 --json number,title,body,mergeCommit,commits \
+            > "$RUNNER_TEMP/prs.json" || echo '::warning::listing merged PRs failed, notes go without them'
+          gh release list --exclude-drafts --limit 1000 --json tagName \
+            > "$RUNNER_TEMP/releases.json" || echo '::warning::listing releases failed, notes use the highest lower tag'
+      - name: Check for the Claude token
+        id: claude
+        env:
+          TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -n "$(printf '%s' "$TOKEN" | tr -d '[:space:]')" ]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Claude Code
+        if: steps.claude.outputs.present == 'true'
+        continue-on-error: true
+        run: npm install --global @anthropic-ai/claude-code@2.1.314
+      # commit and PR text is untrusted input to Claude, so this step holds no other credential
+      - name: Write the release notes
+        continue-on-error: true
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: node scripts/release-notes.js "$TAG" "$RUNNER_TEMP/prs.json" "$RUNNER_TEMP/releases.json" "$RUNNER_TEMP/notes.md"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=(--generate-notes)
+          if [ -f "$RUNNER_TEMP/notes.md" ]; then
+            notes=(--notes-file "$RUNNER_TEMP/notes.md")
+          fi
+          gh release create "$TAG" web-ext-artifacts/*-"${TAG#v}".xpi --verify-tag --title "$TAG" "${notes[@]}"

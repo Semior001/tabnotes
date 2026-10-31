@@ -1,0 +1,71 @@
+version: '3'
+
+vars:
+  WEB_EXT: npx --yes web-ext@10.8.0
+  ARTIFACTS: web-ext-artifacts
+  SOURCE: --source-dir dist
+  # only sign uses it, and its precondition requires RELEASE_VERSION
+  SOURCE_ZIP: '{{.ARTIFACTS}}/source-{{.RELEASE_VERSION}}.zip'
+
+tasks:
+  test:
+    desc: Run unit tests
+    cmds:
+      - npx --no-install tsc --noEmit
+      - node --test
+
+  build:dist:
+    desc: Build the unpacked extension into dist/
+    cmds:
+      - node scripts/build.js
+
+  lint:
+    desc: Run the AMO linter locally
+    # the only dep on build:dist: build and sign depend on lint, and task deps run in parallel
+    # without deduplication, so a second one would run two builds deleting each other's output
+    deps: ['build:dist']
+    cmds:
+      - '{{.WEB_EXT}} lint {{.SOURCE}}'
+
+  install:debug:
+    desc: Build, then start Firefox with the extension as a temporary add-on, in WSL the Windows Firefox
+    interactive: true
+    # a build command, not a dep on build:dist: see the single-dep comment on lint
+    cmds:
+      - node scripts/build.js
+      - cmd: '{{.WEB_EXT}} run {{.SOURCE}}'
+        platforms: [darwin, windows]
+      # WSL runs the linux task binary, so it is told apart here: web-ext cannot drive the Windows
+      # Firefox from WSL, see scripts/install-debug.ps1; from /mnt/c because Windows tools refuse a UNC
+      # working dir
+      - cmd: |
+          if [ -z "$WSL_DISTRO_NAME" ]; then
+            {{.WEB_EXT}} run {{.SOURCE}}
+            exit
+          fi
+          dist="$(wslpath -w "$PWD/dist")"
+          script="$(wslpath -w "$PWD/scripts/install-debug.ps1")"
+          cd /mnt/c && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$script" -Path "$dist"
+        platforms: [linux]
+
+  build:
+    desc: Package the extension into web-ext-artifacts/
+    deps: [test, lint]
+    cmds:
+      - '{{.WEB_EXT}} build {{.SOURCE}} --artifacts-dir {{.ARTIFACTS}} --overwrite-dest'
+
+  sign:
+    desc: Upload to AMO as unlisted and download the signed xpi into web-ext-artifacts/ (run by the release workflow)
+    deps: [test, lint]
+    preconditions:
+      # AMO signs a version only once, so a run without it would burn the placeholder
+      - sh: test -n "$RELEASE_VERSION"
+        msg: RELEASE_VERSION must be set, signing runs from a vX.Y.Z tag (see docs/DEVELOPMENT.md)
+      - sh: test -n "$WEB_EXT_API_KEY" && test -n "$WEB_EXT_API_SECRET"
+        msg: WEB_EXT_API_KEY and WEB_EXT_API_SECRET must be set (see docs/DEVELOPMENT.md)
+    # dist/ comes from the tree and the source zip from HEAD, so they must match
+    cmds:
+      - 'test -z "$(git status --porcelain)" || { echo "sign: working tree is dirty, commit first" >&2; exit 1; }'
+      - mkdir -p {{.ARTIFACTS}}
+      - git archive --format=zip HEAD -o {{.SOURCE_ZIP}}
+      - '{{.WEB_EXT}} sign {{.SOURCE}} --artifacts-dir {{.ARTIFACTS}} --channel unlisted --upload-source-code {{.SOURCE_ZIP}}'

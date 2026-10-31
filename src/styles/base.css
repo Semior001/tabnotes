@@ -1,0 +1,119 @@
+:root {
+  color-scheme: light dark;
+  --color-text: light-dark(#1f2328, #e6edf3);
+  --color-muted: light-dark(#656d76, #8b949e);
+  --color-bg: light-dark(#fff, #0d1117);
+  --color-surface: light-dark(#f6f8fa, #161b22);
+  --color-surface-hover: light-dark(#eaeef2, #21262d);
+  --color-border: light-dark(#d0d7de, #30363d);
+  --color-accent: light-dark(#0969da, #58a6ff);
+  --color-danger: light-dark(#cf222e, #f85149);
+  --color-warning-bg: light-dark(#fff8c5, #272115);
+  --color-warning-border: light-dark(#d4a72c, #9e6a03);
+  --color-selection: light-dark(#d7d4f0, #264f78);
+  --color-selection-unfocused: light-dark(#d9d9d9, #30363d);
+  --color-search-match: light-dark(#ffff99, #5c4a00);
+  /* syntax roles, shared by CodeMirror and highlight.js */
+  --color-syntax-keyword: light-dark(#cf222e, #ff7b72);
+  --color-syntax-string: light-dark(#0a3069, #a5d6ff);
+  --color-syntax-constant: light-dark(#0550ae, #79c0ff);
+  --color-syntax-title: light-dark(#8250df, #d2a8ff);
+  --color-syntax-tag: light-dark(#116329, #7ee787);
+  --color-syntax-builtin: light-dark(#953800, #ffa657);
+  --color-syntax-addition: light-dark(#116329, #aff5b4);
+  --color-syntax-addition-bg: light-dark(#dafbe1, #033a16);
+  --color-syntax-deletion: light-dark(#82071e, #ffdcd7);
+  --color-syntax-deletion-bg: light-dark(#ffebe9, #67060c);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --radius: 4px;
+  --control-height: 31px;
+  --font-ui: 14px/1.5 system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* set by theme.ts; with neither, as in System mode, the browser preference picks */
+:root[data-theme=light] {
+  color-scheme: light;
+}
+
+:root[data-theme=dark] {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font: var(--font-ui);
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.error {
+  color: var(--color-danger);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.header h1 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 1.4em;
+}
+
+/* scoped, as a bare button, input or select rule also restyles CodeMirror's search dialog */
+.header button,
+.banner button,
+.code-block .copy,
+.action,
+.header input,
+.field input,
+.field select {
+  height: var(--control-height);
+  font: inherit;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+.header button,
+.banner button,
+.code-block .copy,
+.action {
+  padding: 0 10px;
+  color: inherit;
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.header button:hover,
+.banner button:hover,
+.code-block .copy:hover,
+.action:hover {
+  background: var(--color-surface-hover);
+}
+
+.action {
+  height: 24px;
+  padding: 0 var(--space-2);
+  font-size: 0.85em;
+}
+
+.header input,
+.field input,
+.field select {
+  padding: 0 var(--space-2);
+}

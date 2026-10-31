@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "types": ["firefox-webext-browser"],
+    "paths": {
+      "codemirror/lib/codemirror.js": ["./node_modules/@types/codemirror/index.d.ts"]
+    }
+  },
+  "include": ["src"]
+}

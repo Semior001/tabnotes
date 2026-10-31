@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>tabnotes - all notes</title>
+  <script src="../theme.js"></script>
+  <link rel="stylesheet" href="recovery.css">
+</head>
+<body>
+  <div class="top">
+    <header id="header" class="header">
+      <h1>All notes</h1>
+      <input id="search" class="search" type="search" placeholder="Search notes" aria-label="Search notes" autofocus>
+      <button id="new-note" type="button">New note</button>
+      <button id="settings" type="button">Settings</button>
+    </header>
+    <div id="bar" class="header" role="toolbar" aria-label="Selected notes" hidden>
+      <span id="bar-count" class="bar-count" aria-live="polite"></span>
+      <button id="bar-move" type="button">Move to Bin</button>
+      <button id="bar-restore" type="button">Restore</button>
+      <button id="bar-delete" type="button">Delete forever</button>
+      <button id="bar-clear" type="button">Clear</button>
+    </div>
+    <p id="status" class="status" role="status" hidden>
+      <span id="status-text"></span>
+      <button id="status-undo" class="action" type="button" hidden>Undo</button>
+    </p>
+  </div>
+  <p id="error" class="error" hidden>Could not load notes</p>
+  <main>
+    <section id="open-section" class="section" aria-labelledby="open-title" hidden>
+      <div class="section-head">
+        <h2 id="open-title">Open <span id="open-count"></span></h2>
+        <label class="select-all"><input id="open-all" type="checkbox"> Select all</label>
+      </div>
+      <ul id="open" class="entries"></ul>
+    </section>
+    <section id="recent-section" class="section" aria-labelledby="recent-title" hidden>
+      <div class="section-head">
+        <h2 id="recent-title">Recently closed <span id="recent-count"></span></h2>
+        <label class="select-all"><input id="recent-all" type="checkbox"> Select all</label>
+      </div>
+      <ul id="recent" class="entries"></ul>
+    </section>
+    <section id="other-section" class="section" aria-labelledby="other-title" hidden>
+      <div class="section-head">
+        <h2 id="other-title">Other notes <span id="other-count"></span></h2>
+        <label class="select-all"><input id="other-all" type="checkbox"> Select all</label>
+      </div>
+      <ul id="other" class="entries"></ul>
+    </section>
+    <section id="bin-section" class="section" aria-labelledby="bin-title" hidden>
+      <details id="bin-details">
+        <summary id="bin-summary"><h2 id="bin-title">Bin <span id="bin-count"></span></h2></summary>
+        <div class="section-head">
+          <label class="select-all"><input id="bin-all" type="checkbox"> Select all</label>
+          <button id="empty-bin" class="action" type="button">Empty bin</button>
+        </div>
+        <ul id="bin" class="entries"></ul>
+      </details>
+    </section>
+    <p id="empty" class="empty" hidden></p>
+  </main>
+  <script src="recovery.js"></script>
+</body>
+</html>

@@ -1,0 +1,406 @@
+/* third-party rules first, so the rules below can override the editor's
+   colours and fixed height at equal specificity */
+@import 'codemirror/lib/codemirror.css';
+@import 'codemirror/addon/dialog/dialog.css';
+@import '../styles/base.css';
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.message {
+  margin: 0;
+  padding-top: 64px;
+  text-align: center;
+  color: var(--color-muted);
+}
+
+/* .error sits in base.css, imported before .message */
+.message.error {
+  color: var(--color-danger);
+}
+
+.page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  gap: var(--space-3);
+}
+
+.header .title {
+  overflow: hidden;
+  font-size: 1.2em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 6px 10px;
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning-border);
+  border-radius: var(--radius);
+}
+
+.panes {
+  /* overridden from the stored fontSize by note.ts */
+  --note-font-size: 14px;
+  display: flex;
+  flex: 1;
+  gap: var(--space-3);
+  min-height: 0;
+}
+
+.CodeMirror,
+.preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
+/* the pane height comes from the flex row, not codemirror.css's fixed 300px */
+.CodeMirror {
+  height: 100%;
+  font: var(--note-font-size)/1.5 var(--font-mono);
+  color: inherit;
+  background: var(--color-bg);
+}
+
+.CodeMirror-gutters {
+  border-right-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.CodeMirror-linenumber {
+  color: var(--color-muted);
+}
+
+.CodeMirror-scrollbar-filler,
+.CodeMirror-gutter-filler {
+  background-color: var(--color-bg);
+}
+
+.CodeMirror-cursor {
+  border-left-color: var(--color-text);
+}
+
+.CodeMirror div.CodeMirror-secondarycursor {
+  border-left-color: var(--color-muted);
+}
+
+.CodeMirror-selected {
+  background: var(--color-selection-unfocused);
+}
+
+.CodeMirror-focused .CodeMirror-selected {
+  background: var(--color-selection);
+}
+
+.CodeMirror-line::selection,
+.CodeMirror-line > span::selection,
+.CodeMirror-line > span > span::selection {
+  background: var(--color-selection);
+}
+
+.cm-searching {
+  background-color: var(--color-search-match);
+}
+
+.CodeMirror-dialog-top {
+  border-bottom-color: var(--color-border);
+}
+
+.CodeMirror-dialog-bottom {
+  border-top-color: var(--color-border);
+}
+
+/* search.js sets this colour inline, which only !important beats */
+.CodeMirror-search-hint {
+  color: var(--color-muted) !important;
+}
+
+/* the exact selectors of codemirror.css, as anything less specific loses */
+div.CodeMirror span.CodeMirror-matchingbracket {
+  color: var(--color-syntax-tag);
+}
+
+div.CodeMirror span.CodeMirror-nonmatchingbracket {
+  color: var(--color-danger);
+}
+
+.cm-s-default .cm-keyword {
+  color: var(--color-syntax-keyword);
+}
+
+.cm-s-default .cm-string {
+  color: var(--color-syntax-string);
+}
+
+.cm-s-default .cm-comment {
+  color: var(--color-muted);
+}
+
+.cm-s-default .cm-header,
+.cm-s-default .cm-atom,
+.cm-s-default .cm-number,
+.cm-s-default .cm-variable-2,
+.cm-s-default .cm-attribute {
+  color: var(--color-syntax-constant);
+}
+
+.cm-s-default .cm-def,
+.cm-s-default .cm-builtin {
+  color: var(--color-syntax-title);
+}
+
+.cm-s-default .cm-quote,
+.cm-s-default .cm-variable-3,
+.cm-s-default .cm-type,
+.cm-s-default .cm-tag {
+  color: var(--color-syntax-tag);
+}
+
+.cm-s-default .cm-string-2 {
+  color: var(--color-syntax-builtin);
+}
+
+.cm-s-default .cm-meta,
+.cm-s-default .cm-qualifier,
+.cm-s-default .cm-bracket,
+.cm-s-default .cm-hr {
+  color: var(--color-muted);
+}
+
+.cm-s-default .cm-link {
+  color: var(--color-accent);
+}
+
+.cm-s-default .cm-error,
+.cm-invalidchar {
+  color: var(--color-danger);
+}
+
+.CodeMirror-focused {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.CodeMirror-lines {
+  padding: var(--space-3) 0;
+}
+
+.CodeMirror pre.CodeMirror-line,
+.CodeMirror pre.CodeMirror-line-like {
+  padding: 0 var(--space-3);
+}
+
+/* relative so that block offsetTop, which scroll sync reads, is measured from here */
+.preview {
+  position: relative;
+  padding: var(--space-3);
+  font-size: var(--note-font-size);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.preview:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.preview > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.preview [type=checkbox] {
+  cursor: pointer;
+}
+
+.preview h1,
+.preview h2,
+.preview h3,
+.preview h4 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.25;
+}
+
+.preview h1 {
+  font-size: 1.5em;
+}
+
+.preview h2 {
+  font-size: 1.3em;
+}
+
+.preview h3 {
+  font-size: 1.15em;
+}
+
+.preview p,
+.preview ul,
+.preview ol,
+.preview pre,
+.preview blockquote {
+  margin: 0 0 0.7em;
+}
+
+.preview ul,
+.preview ol {
+  padding-left: 1.5em;
+}
+
+.preview code {
+  padding: 0.1em 0.3em;
+  font: 0.93em var(--font-mono);
+  background: var(--color-surface);
+  border-radius: var(--radius);
+}
+
+.preview pre {
+  padding: var(--space-2);
+  overflow: auto;
+  background: var(--color-surface);
+  border-radius: var(--radius);
+}
+
+.preview pre code {
+  padding: 0;
+  background: none;
+}
+
+/* explicit: inside a blockquote, string or section they would take its colour */
+.hljs,
+.hljs-subst {
+  color: var(--color-text);
+}
+
+.hljs-doctag,
+.hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+  color: var(--color-syntax-keyword);
+}
+
+.hljs-title {
+  color: var(--color-syntax-title);
+}
+
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--color-syntax-constant);
+}
+
+.hljs-regexp,
+.hljs-string {
+  color: var(--color-syntax-string);
+}
+
+.hljs-built_in,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--color-syntax-builtin);
+}
+
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+  color: var(--color-muted);
+}
+
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+  color: var(--color-syntax-tag);
+}
+
+.hljs-section {
+  color: var(--color-syntax-constant);
+  font-weight: bold;
+}
+
+.hljs-emphasis {
+  color: var(--color-text);
+  font-style: italic;
+}
+
+.hljs-strong {
+  color: var(--color-text);
+  font-weight: bold;
+}
+
+.hljs-addition {
+  color: var(--color-syntax-addition);
+  background-color: var(--color-syntax-addition-bg);
+}
+
+.hljs-deletion {
+  color: var(--color-syntax-deletion);
+  background-color: var(--color-syntax-deletion-bg);
+}
+
+.code-block {
+  position: relative;
+}
+
+/* opacity, as a hidden control could not take keyboard focus */
+.code-block .copy {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  opacity: 0;
+}
+
+.code-block:hover .copy,
+.code-block .copy:focus-visible {
+  opacity: 1;
+}
+
+/* a diagram, or its source while it renders or when it fails, is not code */
+.preview pre.mermaid {
+  padding: 0;
+  background: none;
+}
+
+.preview pre.mermaid svg {
+  max-width: 100%;
+}
+
+.preview img {
+  max-width: 100%;
+  height: auto;
+}
+
+.preview blockquote {
+  padding-left: 0.8em;
+  color: var(--color-muted);
+  border-left: 3px solid var(--color-border);
+}
+
+.preview a {
+  color: var(--color-accent);
+}

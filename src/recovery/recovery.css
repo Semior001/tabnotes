@@ -1,0 +1,246 @@
+@import '../styles/base.css';
+
+body {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: var(--space-4);
+}
+
+/* a selection made far down a long list must still show its bar */
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-bg);
+}
+
+.header {
+  margin-bottom: var(--space-4);
+}
+
+.status {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  margin: 0 0 var(--space-2);
+}
+
+.bar-count {
+  flex: 1;
+  font-weight: 600;
+}
+
+/* the search field takes the free space here */
+.header h1 {
+  flex: initial;
+}
+
+.search {
+  flex: 1;
+}
+
+.section h2 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: 1.1em;
+}
+
+.section-head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.select-all {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  color: var(--color-muted);
+  font-size: 0.85em;
+}
+
+.select-all input {
+  margin: 0;
+}
+
+summary {
+  cursor: pointer;
+}
+
+/* beside the marker, not under it */
+summary h2 {
+  display: inline-block;
+}
+
+.entries {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entry {
+  position: relative;
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  min-height: 32px;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  /* or Shift-click selects page text */
+  user-select: none;
+}
+
+.selected {
+  background: var(--color-surface-hover);
+}
+
+.pick {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.row-main {
+  flex: 1;
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+}
+
+/* a Bin row's area has no type, as it is not clickable */
+.row-main[type] {
+  cursor: pointer;
+}
+
+.row-main[type]:hover .name {
+  text-decoration: underline;
+}
+
+.name,
+.preview {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* the name shrinks only as far as a preview needs: a row with none gives it all */
+.name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.preview {
+  flex: 1 1 0;
+  min-width: 40%;
+}
+
+.preview:empty {
+  display: none;
+}
+
+/* the browser's own text colour is unreadable on the dark value */
+mark {
+  color: var(--color-text);
+  background: var(--color-search-match);
+}
+
+.date,
+.days,
+.preview,
+.empty {
+  color: var(--color-muted);
+}
+
+.date,
+.days {
+  flex-shrink: 0;
+  font-size: 0.85em;
+}
+
+/* over the date, so showing them does not shift the row */
+.actions {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: flex;
+  gap: var(--space-2);
+  padding-left: var(--space-2);
+  background: inherit;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.entry:hover .actions,
+.entry:focus-within .actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .actions {
+    position: static;
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+
+  .preview {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .preview {
+    display: none;
+  }
+
+  /* the title and both header controls leave the search field no room */
+  .header {
+    flex-wrap: wrap;
+  }
+
+  .search {
+    flex-basis: 100%;
+    order: 1;
+  }
+}
+
+.empty {
+  color: var(--color-muted);
+}
+
+.date {
+  flex-shrink: 0;
+  font-size: 0.85em;
+}
+
+.days {
+  font-size: 0.9em;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.snippet {
+  margin: var(--space-1) 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  margin: 0;
+}
+
+.error {
+  margin: 0 0 var(--space-4);
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Notes</title>
+  <script src="../theme.js"></script>
+  <link rel="stylesheet" href="note.css">
+</head>
+<body>
+  <p id="invalid" class="message" hidden>Invalid note link</p>
+  <p id="error" class="message error" hidden>Could not load note</p>
+  <main id="page" class="page" hidden>
+    <header class="header">
+      <h1 id="title" class="title"></h1>
+      <button id="mode" type="button" title="Cycle split, editor and preview (Ctrl+E)">Split</button>
+      <button id="all-notes" type="button">All notes</button>
+      <button id="settings" type="button">Settings</button>
+    </header>
+    <div id="bin" class="banner" hidden>
+      <span id="bin-text"></span>
+      <button id="restore" type="button">Restore</button>
+    </div>
+    <p id="deleted" class="banner error" hidden>This note was deleted</p>
+    <p id="image-error" class="banner error" hidden></p>
+    <p id="save-error" class="banner error" hidden></p>
+    <div id="panes" class="panes">
+      <textarea id="content" aria-label="Note" spellcheck="false"></textarea>
+      <div id="preview" class="preview" tabindex="0"></div>
+    </div>
+  </main>
+  <script src="note.js"></script>
+</body>
+</html>

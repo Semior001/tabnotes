@@ -1,0 +1,9 @@
+.DS_Store
+*.xpi
+web-ext-artifacts/
+dist/
+node_modules/
+.env
+.amo-upload-uuid
+.claude/worktrees/
+docs/plans/
