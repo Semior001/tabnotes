@@ -11,7 +11,7 @@ const {
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameFirstSeen,
   titleVars, expandTitle, TITLE_HINT, KIND_HINT,
-  setTemporary, expire, temporaryFromUrl, sweepClosed, closedAfterFailedWrite, closedDaysLeft,
+  setTemporary, expire, temporaryFromUrl, sweepClosed, closedAfterFailedWrite, closedDaysLeft, closedDaysLeftText,
 } = require('../src/lib/notes.ts');
 
 test('canOpen', async (t) => {
@@ -1610,4 +1610,9 @@ test('closedDaysLeft', async (t) => {
   for (const [name, firstSeen, n, want] of cases) {
     await t.test(name, () => assert.equal(closedDaysLeft(firstSeen, n, now), want));
   }
+  await t.test('as text', () => {
+    assert.equal(closedDaysLeftText(undefined, note, now), '30 days left');
+    assert.equal(closedDaysLeftText(now - 29 * DAY, note, now), '1 day left');
+    assert.equal(closedDaysLeftText(now - 30 * DAY, note, now), '0 days left');
+  });
 });

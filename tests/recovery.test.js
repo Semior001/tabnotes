@@ -481,6 +481,86 @@ test('recovery', async (t) => {
     assert.deepEqual(labels('bin', 0), ['Restore', 'Delete forever']);
   });
 
+  await t.test('only temporary rows carry the marker, in every live section', async () => {
+    const { entry } = await runRecovery({
+      storage: {
+        [key(ID1)]: note(1, { content: 'a', temporary: true }),
+        [key(ID2)]: note(2, { content: 'b', temporary: true }),
+        [key(ID3)]: note(3, { content: 'c', temporary: true }),
+        [key(ID4)]: note(4, { content: 'd' }),
+      },
+      tabs: [{ id: 1, windowId: 10, url: url(ID1) }],
+      closed: [{ tab: { sessionId: 's1', url: url(ID2) } }],
+    });
+    assert.equal(find(entry('open', 0), 'temporary').textContent, 'Temporary');
+    assert.equal(find(entry('recent', 0), 'temporary').textContent, 'Temporary');
+    assert.equal(find(entry('other', 1), 'temporary').textContent, 'Temporary');
+    assert.equal(find(entry('other', 0), 'temporary'), null, 'a permanent note');
+    assert.equal(find(entry('other', 0), 'days'), null);
+  });
+
+  await t.test('a binned note shows its bin countdown and no marker, even if it was temporary', async () => {
+    const { entry } = await runRecovery({
+      storage: {
+        [key(ID1)]: { ...note(1, { content: 'a', deletedAt: NOW - DAY_MS, temporary: true }), binDays: 7 },
+      },
+    });
+    assert.equal(find(entry('bin', 0), 'temporary'), null);
+    assert.equal(find(entry('bin', 0), 'days').textContent, '6 days left');
+  });
+
+  await t.test('closed temporary rows count down from closedNotes; an open one shows no countdown', async () => {
+    const { entry } = await runRecovery({
+      storage: {
+        [key(ID1)]: note(1, { content: 'a', temporary: true }),
+        [key(ID2)]: note(2, { content: 'b', temporary: true }),
+        [key(ID3)]: note(3, { content: 'c', temporary: true }),
+        closedNotes: { [ID1]: NOW - 40 * DAY_MS, [ID2]: NOW - 10 * DAY_MS, [ID3]: NOW - 29 * DAY_MS },
+      },
+      tabs: [{ id: 1, windowId: 10, url: url(ID1) }],
+      closed: [{ tab: { sessionId: 's1', url: url(ID2) } }],
+    });
+    assert.equal(find(entry('open', 0), 'days'), null, 'the map can be stale for an open tab');
+    assert.equal(find(entry('recent', 0), 'days').textContent, '20 days left');
+    assert.equal(find(entry('other', 0), 'days').textContent, '1 day left');
+    assert.ok(find(entry('other', 0), 'date'), 'the date stays');
+  });
+
+  await t.test('with no closedNotes a closed temporary note shows the full 30', async () => {
+    const { entry, reads } = await runRecovery({
+      storage: { [key(ID1)]: note(1, { content: 'a', temporary: true }) },
+    });
+    assert.equal(find(entry('other', 0), 'days').textContent, '30 days left');
+    assert.deepEqual(reads, [[key(ID1)]]);
+  });
+
+  await t.test('closedNotes is read with the notes, and a change to it updates the countdown', async () => {
+    const { entry, reads, state, events } = await runRecovery({
+      storage: {
+        [key(ID1)]: note(1, { content: 'a', temporary: true }),
+        closedNotes: { [ID1]: NOW - DAY_MS },
+      },
+    });
+    assert.deepEqual(reads, [[key(ID1), 'closedNotes']]);
+    assert.equal(find(entry('other', 0), 'days').textContent, '29 days left');
+    state.storage.closedNotes = { [ID1]: NOW - 2 * DAY_MS };
+    events['storage.onChanged']({ closedNotes: {} }, 'local');
+    await settle();
+    assert.equal(find(entry('other', 0), 'days').textContent, '28 days left');
+  });
+
+  await t.test('the countdown goes when a note turns permanent', async () => {
+    const { entry, click } = await runRecovery({
+      storage: {
+        [key(ID1)]: note(1, { content: 'a', temporary: true }),
+        closedNotes: { [ID1]: NOW - DAY_MS },
+      },
+    });
+    await click('other', 0, 'Make permanent');
+    assert.equal(find(entry('other', 0), 'temporary'), null);
+    assert.equal(find(entry('other', 0), 'days'), null);
+  });
+
   await t.test('the main area runs the section action and names it; a Bin row has none', async () => {
     const { entry, click, calls, button } = await runRecovery({
       storage: {
@@ -740,6 +820,7 @@ test('recovery', async (t) => {
       { name: 'storage.onChanged with legacy notes only', args: [{ notes: {} }, 'local'], refreshes: false },
       { name: 'storage.onChanged with an image key', args: [{ [`image:${ID1}`]: {} }, 'local'], refreshes: false },
       { name: 'storage.onChanged with imageOrphans', args: [{ imageOrphans: {} }, 'local'], refreshes: false },
+      { name: 'storage.onChanged with closedNotes', args: [{ closedNotes: {} }, 'local'], refreshes: true },
       { name: 'sessions.onChanged', args: [], refreshes: true },
       { name: 'tabs.onRemoved', args: [1, {}], refreshes: true },
       { name: 'tabs.onAttached', args: [1, { newWindowId: 2, newPosition: 0 }], refreshes: true },

@@ -153,13 +153,15 @@ mark {
 
 .date,
 .days,
+.temporary,
 .preview,
 .empty {
   color: var(--color-muted);
 }
 
 .date,
-.days {
+.days,
+.temporary {
   flex-shrink: 0;
   font-size: 0.85em;
 }

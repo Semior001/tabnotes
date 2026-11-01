@@ -2,8 +2,8 @@
 // closed tabs, other notes and the bin. Pure logic lives in lib/notes.ts.
 
 import {
-  classify, matches, idFromStorageKey, notesFromStorage, noteUrl, storageKey, edit, trash, restore, daysLeftText,
-  rowText, searchParts, selectRange, setTemporary, shortDate, DEFAULT_TITLE, type Entry, type Note, type RecentEntry, type Sections, type Settings, type StopMessage,
+  classify, closedDaysLeftText, matches, idFromStorageKey, notesFromStorage, noteUrl, storageKey, edit, trash, restore, daysLeftText,
+  rowText, searchParts, selectRange, setTemporary, shortDate, DEFAULT_TITLE, type ClosedNotes, type Entry, type Note, type RecentEntry, type Sections, type Settings, type StopMessage,
 } from '../lib/notes.ts';
 
 // what became of a note a bulk action touched: gone means there was nothing
@@ -30,6 +30,7 @@ type Words = [string, string, string];
   let applied = 0;
   let loaded = false;
   let defaultTitle = DEFAULT_TITLE;
+  let closedNotes: ClosedNotes = {};
   // the Bin's state before a search opened it, null with no such search
   let binBefore: boolean | null = null;
   // live and Bin selections stay apart, so a permanent delete cannot be mixed
@@ -41,6 +42,8 @@ type Words = [string, string, string];
   // notes the last move binned, which Undo restores
   let undo: string[] = [];
   let visible = { open: [] as string[], recent: [] as string[], other: [] as string[], bin: [] as string[] };
+
+  const listed = (key: string) => idFromStorageKey(key) !== null || key === 'settings' || key === 'closedNotes';
 
   const warn = (what: string) => (err: unknown) => console.warn(`tabnotes: ${what}:`, err);
   const warnOr = <T>(what: string, fallback: T) => (err: unknown): T => {
@@ -323,7 +326,13 @@ type Words = [string, string, string];
     age.title = new Date(note.updatedAt).toLocaleString();
     const bar = el('div', 'actions');
     bar.append(...(binned ? acts : acts.slice(1)));
-    li.append(box, mainArea(binned ? undefined : acts[0], name, preview), age, bar);
+    li.append(box, mainArea(binned ? undefined : acts[0], name, preview));
+    if (note.deletedAt === null && note.temporary === true) {
+      li.append(el('span', 'temporary', 'Temporary'));
+      // the map can be one interval stale, so an open note shows no clock
+      if (section !== 'open') li.append(el('span', 'days', closedDaysLeftText(closedNotes[item.id], note, now)));
+    }
+    li.append(age, bar);
     return li;
   };
 
@@ -394,7 +403,7 @@ type Words = [string, string, string];
       // never get(null): that would load the bytes of every image
       const keys = await browser.storage.local.getKeys();
       data = await Promise.all([
-        browser.storage.local.get(keys.filter((k) => idFromStorageKey(k) !== null || k === 'settings')),
+        browser.storage.local.get(keys.filter(listed)),
         browser.tabs.query({}),
         browser.sessions.getRecentlyClosed(),
       ]);
@@ -412,6 +421,7 @@ type Words = [string, string, string];
     const [stored, tabs, closed] = data;
     groups = classify(notesFromStorage(stored), tabs, closed, noteBase);
     defaultTitle = (stored.settings as Settings | undefined)?.defaultTitle || DEFAULT_TITLE;
+    closedNotes = (stored.closedNotes as ClosedNotes | undefined) ?? {};
     texts = new Map(sections.flatMap((s) => groups[s]).map((item) => [item.id, rowText(item.note, defaultTitle)]));
     render();
   };
@@ -486,9 +496,10 @@ type Words = [string, string, string];
   $('settings').addEventListener('click', () => {
     browser.runtime.openOptionsPage().catch(warn('open settings'));
   });
-  // settings names notes through its default title; other keys do not change the list
+  // settings names notes through its default title and closedNotes holds their
+  // countdowns; other keys do not change the list
   browser.storage.onChanged.addListener((changes) => {
-    if (Object.keys(changes).some((k) => idFromStorageKey(k) !== null || k === 'settings')) refresh();
+    if (Object.keys(changes).some(listed)) refresh();
   });
   browser.sessions.onChanged.addListener(() => refresh());
   browser.tabs.onRemoved.addListener(() => refresh());

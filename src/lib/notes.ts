@@ -301,10 +301,16 @@ export function closedDaysLeft(firstSeen: number | undefined, note: Note, now: n
   return daysUntil(Math.max(firstSeen ?? now, note.updatedAt), TEMPORARY_DAYS, now);
 }
 
+const leftText = (n: number) => `${n} day${n === 1 ? '' : 's'} left`;
+
+// closedDaysLeftText is that countdown as All notes shows it
+export function closedDaysLeftText(firstSeen: number | undefined, note: Note, now: number): string {
+  return leftText(closedDaysLeft(firstSeen, note, now));
+}
+
 // daysLeftText is the bin countdown shown on the note page and All notes
 export function daysLeftText(note: BinnedNote, now: number): string {
-  const n = daysLeft(note, now);
-  return `${n} day${n === 1 ? '' : 's'} left`;
+  return leftText(daysLeft(note, now));
 }
 
 export function expired(note: Note, now: number): boolean {
