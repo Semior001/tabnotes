@@ -103,7 +103,7 @@ The tag is the version: CI writes it into `dist/manifest.json` and commits nothi
 `.github/workflows/release.yml` then runs two jobs, one run per tag at a time:
 
 1. `guard`, with no secrets: the tag is a strict `vX.Y.Z`, the tagged commit is on `origin/main`, and the tag is the highest version among the strict tags, so a mistyped lower tag stops before signing. The actor check is a job-level `if` on both jobs: for anyone but the repo owner they show as skipped, with no error.
-2. `release`, in the `release` environment: `npm ci`, then `task sign` with `RELEASE_VERSION` (tests, lint, clean tree, source zip, AMO), within a 30 minute job limit. The signed xpi is uploaded as the `signed-xpi` workflow artifact right after signing, then the notes are written and `gh release create` publishes the release with the xpi attached.
+2. `release`, in the `release` environment, once the owner approves the deployment: `npm ci`, then `task sign` with `RELEASE_VERSION` (tests, lint, clean tree, source zip, AMO), within a 30 minute job limit. The signed xpi is uploaded as the `signed-xpi` workflow artifact right after signing, then the notes are written and `gh release create` publishes the release with the xpi attached.
 
 `.github/workflows/ci.yml` runs `task test`, `tests/build.test.js` with `RELEASE_VERSION` set, as `task sign` does, and `task lint` on pushes and pull requests to `main`, with a read-only token and no secrets.
 
@@ -120,12 +120,12 @@ Get the AMO credentials at https://addons.mozilla.org/developers/addon/api/key/ 
 **Maintainer-only guards.** A tag-triggered workflow runs the workflow file of the tagged commit, so a check inside the file does not bind someone who can push that commit and tag. GitHub settings are the real boundary, and they live outside this repo, so until they are set only the workflow checks apply. Before the first tag, create the `release` environment with the tag policy below and the secrets above: without them `task sign` stops at its credentials precondition.
 
 - Tag ruleset `release tags` on `refs/tags/v*`: restricts creation, update and deletion, with the repository admin role as the only bypass.
-- `release` environment with a deployment policy of type tag, not branch, allowing only `v*.*.*`. A branch-type entry would let a branch named `v1.2.3` through. No required reviewer is set: add yourself once the repo is public, if offered; whether Pro offers it is unverified.
+- `release` environment with a deployment policy of type tag, not branch, allowing only `v*.*.*`. A branch-type entry would let a branch named `v1.2.3` through. The owner is its required reviewer, so a release waits for approval in the Actions run before it reads the secrets.
 - `main` ruleset on `refs/heads/main` blocking force-push and deletion, with no bypass. With other collaborators, also require PRs, since the guards limit who releases, not what `main` holds: code on `main` is signed by the next tag.
 - Release immutability, as a write collaborator could otherwise replace assets on a published release.
 - `sha_pinning_required` in the repo's Actions permissions, so a workflow using an action not pinned to a full SHA fails.
 - `ci.yml` checks as required on `main` if PRs become the only path.
-- To set when the repo goes public: fork PR approval for all external contributors, Dependabot alerts, secret scanning, push protection and private vulnerability reporting.
+- Fork PR approval for all external contributors, Dependabot alerts, secret scanning, push protection and private vulnerability reporting.
 
 The workflow checks are a second layer that catches mistakes and works if a setting is lost. Besides `guard`, the `release` job repeats the actor check, because "Re-run failed jobs" does not re-run a `guard` that passed. The trigger is tag pushes only, with no manual or chained trigger.
 
@@ -308,8 +308,6 @@ These checks need an interactive Firefox with Sidebery and are not covered by `n
 - [ ] Mermaid flowchart and sequence diagrams in dark, with no CSP errors in the console. A theme change keeps the preview's scroll position.
 - [ ] Transparent images in a note on the dark background: acceptable, as no backdrop is added.
 - [ ] No errors in the console of the background script and of the note, All notes and Settings pages.
-- [ ] With the repo public, a release xpi downloads while logged out.
-- [ ] With the repo public, GitHub detects `LICENSE` as MIT.
 - [ ] `CLAUDE_CODE_OAUTH_TOKEN` works with `claude --print` on a runner: the log shows `release notes for vX.Y.Z: claude`. A failure only shows as a fallback in that `::notice`.
 - [ ] The actor `if` on the `release` job is evaluated again on "Re-run failed jobs".
 - [ ] A re-run after AMO approved a version is refused as a duplicate, and how that failure reads.
