@@ -10,6 +10,7 @@ const {
   codeBlockHTML, previewExtension, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, toggleWrap, linkText, fontSizeFrom, themeFrom, isDarkTheme,
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameOrphans,
+  titleVars, expandTitle, TITLE_HINT,
 } = require('../src/lib/notes.ts');
 
 test('canOpen', async (t) => {
@@ -1224,4 +1225,187 @@ test('sweepImages', async (t) => {
     const got = sweepImages(keys(IMG_A, IMG_B, IMG_C), notes, { [IMG_A]: NOW - 8 * DAY }, NOW);
     assert.deepEqual(got, { remove: [IMG_A], orphans: { [IMG_C]: NOW } });
   });
+});
+
+test('expandTitle', async (t) => {
+  const vars = { date: '2026-11-01', time: '14:05', weekday: 'Sunday', tab: 'My Page', host: 'github.com' };
+  const expands = async (name, cases) => {
+    await t.test(name, async (t) => {
+      for (const [template, want, over] of cases) {
+        await t.test(template || '(empty)', () => {
+          assert.equal(expandTitle(template, { ...vars, ...over }), want);
+        });
+      }
+    });
+  };
+
+  await expands('variables', [
+    ['{date}', '2026-11-01'],
+    ['{time}', '14:05'],
+    ['{weekday}', 'Sunday'],
+    ['{tab}', 'My Page'],
+    ['{host}', 'github.com'],
+  ]);
+  await expands('functions', [
+    ['{tab | lower}', 'my page'],
+    ['{tab | upper}', 'MY PAGE'],
+    ['{tab | trunc 4}', 'My …'],
+  ]);
+  await expands('chains run left to right', [
+    ['{tab | upper | trunc 4}', 'MY …'],
+    ['{tab | trunc 4 | lower | upper}', 'MY …'],
+    ['{host | upper | lower}', 'github.com'],
+  ]);
+  await expands('whitespace is optional', [
+    ['{ date }', '2026-11-01'],
+    ['{tab|lower}', 'my page'],
+    ['{tab|trunc 4|upper}', 'MY …'],
+    ['{  tab  |  trunc   4  }', 'My …'],
+  ]);
+  await expands('several placeholders', [
+    ['{date} - {tab | trunc 30}', '2026-11-01 - My Page'],
+    ['{date}{time}', '2026-11-0114:05'],
+    ['{date} {date}', '2026-11-01 2026-11-01'],
+    ['{bad} {date}', '{bad} 2026-11-01'],
+  ]);
+  await expands('text with no braces', [
+    ['Notes', 'Notes'],
+    ['date | lower', 'date | lower'],
+    ['', ''],
+  ]);
+  await expands('the result is trimmed', [
+    ['  Notes  ', 'Notes'],
+    ['{tab} - {host}', '-', { tab: '', host: '' }],
+    ['{tab}', '', { tab: '' }],
+    ['  {tab}  ', '', { tab: '' }],
+  ]);
+  await expands('an empty value is a value, not a failure', [
+    ['{tab | upper}', '', { tab: '' }],
+    ['{host | trunc 3}', '', { host: '' }],
+  ]);
+  await expands('unknown names stay literal', [
+    ['{nope}', '{nope}'],
+    ['{date | nope}', '{date | nope}'],
+    ['{nope | lower}', '{nope | lower}'],
+    ['{tab | upper | nope}', '{tab | upper | nope}'],
+    ['{tab | nope | upper}', '{tab | nope | upper}'],
+    ['{date lower}', '{date lower}'],
+    ['{DATE}', '{DATE}'],
+    ['{tab | LOWER}', '{tab | LOWER}'],
+  ]);
+  await expands('names inherited from Object are not variables', [
+    ['{constructor}', '{constructor}'],
+    ['{toString}', '{toString}'],
+    ['{__proto__}', '{__proto__}'],
+    ['{tab | constructor}', '{tab | constructor}'],
+  ]);
+  await expands('empty placeholders and pipes stay literal', [
+    ['{}', '{}'],
+    ['{ }', '{ }'],
+    ['{ | lower }', '{ | lower }'],
+    ['{date |}', '{date |}'],
+    ['{date | | lower}', '{date | | lower}'],
+  ]);
+  await expands('wrong arguments stay literal', [
+    ['{tab | lower 5}', '{tab | lower 5}'],
+    ['{tab | upper 5}', '{tab | upper 5}'],
+    ['{tab | trunc}', '{tab | trunc}'],
+    ['{tab | trunc 0}', '{tab | trunc 0}'],
+    ['{tab | trunc -1}', '{tab | trunc -1}'],
+    ['{tab | trunc 1.5}', '{tab | trunc 1.5}'],
+    ['{tab | trunc 3 4}', '{tab | trunc 3 4}'],
+    ['{tab | trunc x}', '{tab | trunc x}'],
+    ['{tab | trunc 1e2}', '{tab | trunc 1e2}'],
+  ]);
+  await expands('unbalanced braces', [
+    ['{date', '{date'],
+    ['date}', 'date}'],
+    ['{date} {tab', '2026-11-01 {tab'],
+    ['{{date}}', '{2026-11-01}'],
+    ['{{date}', '{2026-11-01'],
+  ]);
+  await expands('trunc', [
+    ['{tab | trunc 8}', 'My Page'],
+    ['{tab | trunc 7}', 'My Page'],
+    ['{tab | trunc 6}', 'My Pa…'],
+    ['{tab | trunc 1}', '…'],
+    ['{tab | trunc 99999999999999999999999}', 'My Page'],
+    ['{tab | trunc 3}', 'a😀b', { tab: 'a😀b' }],
+    ['{tab | trunc 2}', 'a…', { tab: 'a😀b' }],
+    ['{tab | trunc 3}', 'a😀…', { tab: 'a😀bc' }],
+    ['{tab | trunc 2}', '😀…', { tab: '😀😀😀' }],
+  ]);
+  await expands('values are not templates', [
+    ['{tab}', '{date}', { tab: '{date}' }],
+    ['{tab} {date}', '{date} 2026-11-01', { tab: '{date}' }],
+    ['{tab | upper}', '$&', { tab: '$&' }],
+    ['{tab}', "$' $` $1", { tab: "$' $` $1" }],
+    ['{tab | lower}', 'a | upper', { tab: 'A | upper' }],
+  ]);
+});
+
+test('titleVars', async (t) => {
+  const NOW = new Date(2026, 10, 1, 14, 5);
+
+  await t.test('date and time are zero padded', () => {
+    const vars = titleVars(new Date(2026, 0, 2, 3, 4), null);
+    assert.equal(vars.date, '2026-01-02');
+    assert.equal(vars.time, '03:04');
+  });
+  await t.test('date and time are local near midnight', (t) => {
+    const tz = process.env.TZ;
+    t.after(() => {
+      if (tz === undefined) delete process.env.TZ;
+      else process.env.TZ = tz;
+    });
+    // Both ends of the day, so a UTC getter fails in a zone on either side of UTC.
+    for (const zone of ['Asia/Almaty', 'America/New_York']) {
+      process.env.TZ = zone;
+      const late = titleVars(new Date(2026, 10, 1, 23, 59), null);
+      assert.deepEqual([late.date, late.time, late.weekday], ['2026-11-01', '23:59', 'Sunday']);
+      const early = titleVars(new Date(2026, 10, 1, 0, 5), null);
+      assert.deepEqual([early.date, early.time, early.weekday], ['2026-11-01', '00:05', 'Sunday']);
+    }
+  });
+  await t.test('weekday is the en-US name', () => {
+    assert.equal(titleVars(NOW, null).weekday, 'Sunday');
+    assert.equal(titleVars(new Date(2026, 10, 4, 12), null).weekday, 'Wednesday');
+  });
+  await t.test('no source', () => {
+    const vars = titleVars(NOW, null);
+    assert.equal(vars.tab, '');
+    assert.equal(vars.host, '');
+  });
+  await t.test('source with no url keeps its title', () => {
+    const vars = titleVars(NOW, { title: 'A page' });
+    assert.equal(vars.tab, 'A page');
+    assert.equal(vars.host, '');
+  });
+  await t.test('source with no title keeps its host', () => {
+    const vars = titleVars(NOW, { url: 'https://github.com/a' });
+    assert.equal(vars.tab, '');
+    assert.equal(vars.host, 'github.com');
+  });
+  const hosts = [
+    ['https', 'https://github.com/a?b#c', 'github.com'],
+    ['http with port', 'http://localhost:8080/', 'localhost'],
+    ['about:blank', 'about:blank', ''],
+    ['moz-extension', 'moz-extension://0f1e2d3c-aaaa-4bbb-8ccc-000011112222/note/note.html?id=x', ''],
+    ['file', 'file:///tmp/x', ''],
+    ['unparseable', 'not a url', ''],
+  ];
+  for (const [name, url, want] of hosts) {
+    await t.test(`host: ${name}`, () => {
+      const vars = titleVars(NOW, { title: 'T', url });
+      assert.equal(vars.host, want);
+      assert.equal(vars.tab, 'T');
+    });
+  }
+});
+
+test('TITLE_HINT names every variable and function, and no URL', () => {
+  for (const name of ['{date}', '{time}', '{weekday}', '{tab}', '{host}', 'trunc N', 'lower', 'upper']) {
+    assert.ok(TITLE_HINT.includes(name), name);
+  }
+  assert.doesNotMatch(TITLE_HINT, /https?:\/\//);
 });

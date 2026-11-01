@@ -27,6 +27,17 @@ export interface Settings {
 
 export const DEFAULT_TITLE = 'Notes';
 
+export interface TitleVars {
+  date: string;
+  time: string;
+  weekday: string;
+  tab: string;
+  host: string;
+}
+
+export const TITLE_HINT = 'Variables: {date}, {time}, {weekday}, {tab} (the tab the note was opened from), {host} (its hostname). '
+  + 'Functions: trunc N, lower, upper, as in {tab | trunc 30}.';
+
 // ImageValue is the stored value of an image:<id> key
 export interface ImageValue {
   dataUrl: string;
@@ -404,6 +415,65 @@ export function shortDate(ts: number, now: number): string {
   const date = new Date(ts);
   const year = date.getFullYear() === new Date(now).getFullYear() ? undefined : 'numeric';
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year });
+}
+
+// titleVars has no host for anything but http(s): about: has none, and a
+// moz-extension: hostname is a uuid, which a toolbar click from a note tab
+// would put in the title.
+export function titleVars(now: Date, source: { title?: string; url?: string } | null): TitleVars {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const url = source?.url ?? '';
+  return {
+    date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    weekday: now.toLocaleDateString('en-US', { weekday: 'long' }),
+    tab: source?.title ?? '',
+    host: canOpen(url) ? new URL(url).hostname : '',
+  };
+}
+
+// expandTitle makes one pass, so a value holding a placeholder is not expanded
+// again. A placeholder it cannot evaluate stays as literal text.
+export function expandTitle(template: string, vars: TitleVars): string {
+  const variable = (name: string): string | null => {
+    switch (name) {
+      case 'date':
+      case 'time':
+      case 'weekday':
+      case 'tab':
+      case 'host':
+        return vars[name];
+      default:
+        return null;
+    }
+  };
+  const apply = (value: string, call: string): string | null => {
+    const [fn, ...args] = call.split(/\s+/);
+    switch (fn) {
+      case 'lower':
+        return args.length === 0 ? value.toLowerCase() : null;
+      case 'upper':
+        return args.length === 0 ? value.toUpperCase() : null;
+      case 'trunc': {
+        if (args.length !== 1 || !/^[1-9]\d*$/.test(args[0])) return null;
+        const max = Number(args[0]);
+        // Code points, so the cut cannot split a surrogate pair.
+        const chars = [...value];
+        return chars.length <= max ? value : `${chars.slice(0, max - 1).join('')}…`;
+      }
+      default:
+        return null;
+    }
+  };
+  const expanded = template.replace(/\{[^{}]*\}/g, (placeholder) => {
+    const [name, ...calls] = placeholder.slice(1, -1).split('|').map((part) => part.trim());
+    let value = variable(name);
+    for (const call of calls) {
+      if (value !== null) value = apply(value, call);
+    }
+    return value ?? placeholder;
+  });
+  return expanded.trim();
 }
 
 // escapeHTML turns raw HTML in a note into text, so the preview renders
