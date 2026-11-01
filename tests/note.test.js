@@ -2399,6 +2399,70 @@ test('note page', async (t) => {
         assert.equal('title' in page.els.title, false);
       });
     });
+
+    await t.test('from another tab', async (t) => {
+      const renamed = (extra = {}) => stored('a', { title: 'Other', updatedAt: 2, ...extra });
+
+      await t.test('updates the header and the tab title', async () => {
+        const { els, doc, writes, change } = await runNote(opts());
+        change({ [KEY]: { oldValue: stored('a'), newValue: renamed() } });
+        assert.equal(els.title.textContent, 'Other');
+        assert.equal(doc.title, 'Other');
+        assert.deepEqual(writes(), []);
+      });
+
+      await t.test('survives a pending save', async () => {
+        const { els, doc, writes, clock, type, change, cm } = await runNote(opts());
+        type('ab');
+        change({ [KEY]: { oldValue: stored('a'), newValue: renamed() } });
+        assert.equal(els.title.textContent, 'Other');
+        assert.equal(doc.title, 'Other');
+        assert.equal(cm().getValue(), 'ab');
+        clock.run();
+        assert.deepEqual(writes(), [
+          ['storage.local.set', { [KEY]: { title: 'Other', content: 'ab', updatedAt: 1000, deletedAt: null } }],
+        ]);
+      });
+
+      await t.test('leaves an open input alone', async () => {
+        const page = await runNote(opts());
+        const input = open(page, 'Draft');
+        page.change({ [KEY]: { oldValue: stored('a'), newValue: renamed() } });
+        assert.equal(input.value, 'Draft');
+        assert.equal(input.hidden, false);
+        assert.equal(page.els.title.textContent, 'Other');
+      });
+
+      await t.test('closing an input left unchanged keeps the adopted title', async (t) => {
+        for (const key of ['Enter', 'Escape']) {
+          await t.test(key, async () => {
+            const page = await runNote(opts());
+            const input = open(page);
+            page.change({ [KEY]: { oldValue: stored('a'), newValue: renamed() } });
+            press(input, key);
+            closed(page.els);
+            assert.equal(page.els.title.textContent, 'Other');
+            assert.equal(page.doc.title, 'Other');
+            assert.deepEqual(page.writes(), []);
+          });
+        }
+      });
+
+      await t.test('a late echo of an older write does not take the title back', async () => {
+        const page = await runNote(opts());
+        page.type('ab');
+        page.clock.run();
+        const first = page.writes()[0][1][KEY];
+        page.clock.now = 2000;
+        press(open(page, 'New'), 'Enter');
+        page.change({ [KEY]: { newValue: first } });
+        assert.equal(page.els.title.textContent, 'New');
+        assert.equal(page.doc.title, 'New');
+        page.type('abc');
+        page.clock.run();
+        assert.equal(page.writes().at(-1)[1][KEY].title, 'New');
+      });
+    });
   });
 
   await t.test('a failed note save', async (t) => {

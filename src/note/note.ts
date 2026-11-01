@@ -240,6 +240,10 @@ declare const mermaid: typeof import('mermaid').default;
     $('bin-text').textContent = `This note is in the bin (${daysLeftText(note, Date.now())})`;
   };
   showBin();
+  const showTitle = () => {
+    titleEl.textContent = note.title;
+    document.title = note.title;
+  };
   // a binned note left open for days would show a stale count
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && !stopped) showBin();
@@ -591,8 +595,7 @@ declare const mermaid: typeof import('mermaid').default;
     const title = expandTitle(titleInput.value, titleVars(new Date(), source));
     if (title === '') return;
     note = { ...note, title };
-    titleEl.textContent = title;
-    document.title = title;
+    showTitle();
     saver.schedule();
     saver.flush();
   };
@@ -630,11 +633,12 @@ declare const mermaid: typeof import('mermaid').default;
     return lastWrite.then(() => true);
   });
 
-  // storage is the source of truth for the bin state: deletedAt is always
-  // adopted, so a pending save keeps it; content only when nothing is pending,
-  // so typing is never overwritten (this tab's own echoes are then no-ops).
-  // A value older than the in-memory note is a late echo of an earlier write
-  // of this tab and is ignored, or it would bring back older content or bin state.
+  // storage is the source of truth for the bin state and the title: both are
+  // always adopted, so a pending save keeps them; content only when nothing is
+  // pending, so typing is never overwritten (this tab's own echoes are then
+  // no-ops). An open rename input keeps its text. A value older than the
+  // in-memory note is a late echo of an earlier write of this tab and is
+  // ignored, or it would bring back older content, title or bin state.
   onChange = ({ newValue }) => {
     if (stopped) return;
     if (newValue === undefined) {
@@ -646,12 +650,14 @@ declare const mermaid: typeof import('mermaid').default;
     }
     if (newValue.updatedAt < note.updatedAt) return;
     if (saver.pending()) {
-      note = { ...note, deletedAt: newValue.deletedAt };
+      note = { ...note, deletedAt: newValue.deletedAt, title: newValue.title };
       showBin();
+      showTitle();
       return;
     }
     note = newValue;
     showBin();
+    showTitle();
     if (cm!.getValue() === note.content) return;
     cm!.operation(() => {
       const cursor = cm!.getCursor();
