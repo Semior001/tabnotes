@@ -42,6 +42,7 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
     error: element({ hidden: true }),
     'default-title': element({ disabled: true }),
     'title-hint': element({ textContent: '' }),
+    'new-notes': element({ disabled: true, value: 'permanent' }),
     'font-size': element({ disabled: true }),
     theme: element({ disabled: true, value: 'system' }),
     'all-notes': element(),
@@ -96,6 +97,7 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
   const input = els['default-title'];
   const size = els['font-size'];
   const theme = els.theme;
+  const kind = els['new-notes'];
   const type = (value) => {
     input.value = value;
     input.dispatch('input');
@@ -111,12 +113,16 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
     theme.value = value;
     theme.dispatch('change');
   };
+  const pickKind = (value) => {
+    kind.value = value;
+    kind.dispatch('change');
+  };
   // change delivers a storage.onChanged event to the page
   const change = (changes, area = 'local') => {
     for (const fn of changeListeners) fn(structuredClone(changes), area);
   };
   const writes = () => calls.filter(([name]) => name === 'storage.local.set');
-  return { els, input, size, theme, storage, warnings, calls, writes, type, enterSize, pickTheme, change, releaseLoad };
+  return { els, input, size, theme, kind, storage, warnings, calls, writes, type, enterSize, pickTheme, pickKind, change, releaseLoad };
 }
 
 test('options.html starts with the harness state', () => {
@@ -127,8 +133,13 @@ test('options.html starts with the harness state', () => {
   assert.match(html, /<input id="default-title"[^>]*\sdisabled[\s>]/);
   assert.match(html, /<input id="font-size" type="number" min="10" max="32"[^>]*\sdisabled[\s>]/);
   assert.match(html, /<select id="theme" disabled>/);
-  const options = [...html.matchAll(/<option value="([^"]+)">([^<]+)</g)].map((m) => [m[1], m[2]]);
-  assert.deepEqual(options, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]);
+  const options = (id) => {
+    const select = html.match(new RegExp(`<select id="${id}"[^>]*>[\\s\\S]*?</select>`))[0];
+    return [...select.matchAll(/<option value="([^"]+)">([^<]+)</g)].map((m) => [m[1], m[2]]);
+  };
+  assert.deepEqual(options('theme'), [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]);
+  assert.match(html, /toolbar button<\/span>\s*<select id="new-notes" disabled>/);
+  assert.deepEqual(options('new-notes'), [['permanent', 'Permanent'], ['temporary', 'Temporary']]);
   assert.match(html, /id="all-notes"[^>]*>All notes</);
   assert.match(html, /Default title for new notes/);
   // the hint sits in .field for the spacing but outside the label, so it is not
@@ -486,5 +497,80 @@ test('options theme', async (t) => {
     releaseLoad();
     await settle();
     assert.equal(theme.value, 'system');
+  });
+});
+
+test('options kind of new notes', async (t) => {
+  await t.test('defaults to permanent and enables the select', async (t) => {
+    const cases = [
+      { name: 'no settings', storage: {} },
+      { name: 'no key', storage: { settings: { defaultTitle: 'X' } } },
+    ];
+    for (const c of cases) {
+      await t.test(c.name, async () => {
+        const { kind, writes, warnings } = await runOptions({ storage: c.storage });
+        assert.equal(kind.value, 'permanent');
+        assert.equal(kind.disabled, false);
+        assert.deepEqual(writes(), []);
+        assert.deepEqual(warnings, []);
+      });
+    }
+  });
+
+  await t.test('an unknown stored value reads as permanent', async (t) => {
+    for (const temporary of [false, 1, 'yes', 'true', null]) {
+      await t.test(JSON.stringify(temporary), async () => {
+        const { kind } = await runOptions({ storage: { settings: { defaultTitle: 'X', temporary } } });
+        assert.equal(kind.value, 'permanent');
+      });
+    }
+  });
+
+  await t.test('a saved value round-trips', async () => {
+    const { storage, pickKind, writes } = await runOptions({ storage: { settings: { defaultTitle: 'X' } } });
+    pickKind('temporary');
+    await settle();
+    assert.deepEqual(writes(), [['storage.local.set', { settings: { defaultTitle: 'X', temporary: true } }]]);
+    const { kind } = await runOptions({ storage });
+    assert.equal(kind.value, 'temporary');
+  });
+
+  await t.test('permanent omits the key, never storing false', async () => {
+    const { storage, pickKind } = await runOptions({ storage: { settings: { defaultTitle: 'X', temporary: true } } });
+    pickKind('permanent');
+    await settle();
+    assert.deepEqual(storage.settings, { defaultTitle: 'X' });
+  });
+
+  await t.test('editing the title keeps the kind', async () => {
+    const { storage, type } = await runOptions({ storage: { settings: { defaultTitle: 'X', temporary: true } } });
+    type('Y');
+    await settle();
+    assert.deepEqual(storage.settings, { defaultTitle: 'Y', temporary: true });
+  });
+
+  await t.test('changing the kind keeps the title', async () => {
+    const { storage, pickKind } = await runOptions({ storage: { settings: { defaultTitle: '{date} X' } } });
+    pickKind('temporary');
+    await settle();
+    assert.deepEqual(storage.settings, { defaultTitle: '{date} X', temporary: true });
+  });
+
+  await t.test('rejected save is logged', async () => {
+    const { warnings, pickKind } = await runOptions({ reject: { 'storage.local.set': true } });
+    pickKind('temporary');
+    await settle();
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: save settings:']);
+  });
+
+  await t.test('failed load keeps the select disabled and never saves', async () => {
+    const { kind, writes, pickKind } = await runOptions({
+      storage: { settings: { defaultTitle: 'keep', temporary: true } },
+      reject: { 'storage.local.get': true },
+    });
+    assert.equal(kind.disabled, true);
+    assert.equal(kind.value, 'permanent');
+    pickKind('temporary');
+    assert.deepEqual(writes(), []);
   });
 });

@@ -1,4 +1,5 @@
 // Options page glue: edits settings.defaultTitle, the title of new notes,
+// settings.temporary, the kind of a note created by the toolbar button,
 // fontSize, the editor and preview font size of every note tab, and theme,
 // the colour mode of every page.
 
@@ -7,6 +8,7 @@ import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } fro
 (async function () {
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
   const inputEl = $<HTMLInputElement>('default-title');
+  const kindEl = $<HTMLSelectElement>('new-notes');
   const sizeEl = $<HTMLInputElement>('font-size');
   const themeEl = $<HTMLSelectElement>('theme');
   $('title-hint').textContent = TITLE_HINT;
@@ -62,16 +64,23 @@ import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } fro
   }
   inputEl.value = stored.settings?.defaultTitle || DEFAULT_TITLE;
   inputEl.disabled = false;
+  kindEl.value = stored.settings?.temporary === true ? 'temporary' : 'permanent';
+  kindEl.disabled = false;
   if (!sizeChanged) sizeEl.value = String(fontSizeFrom(stored.fontSize));
   sizeEl.disabled = false;
   if (!themeChanged) themeEl.value = themeFrom(stored.theme);
   themeEl.disabled = false;
 
-  // one tiny key, so every input is saved at once and nothing is lost on close
-  inputEl.addEventListener('input', () => {
+  // one tiny key, so every input is saved at once and nothing is lost on close.
+  // settings is written whole, so both fields build it here and neither drops
+  // the other. temporary is left out for permanent: absence is the default.
+  const saveSettings = () => {
     const settings: Settings = { defaultTitle: inputEl.value.trim() || DEFAULT_TITLE };
+    if (kindEl.value === 'temporary') settings.temporary = true;
     browser.storage.local.set({ settings }).catch(warn('save settings'));
-  });
+  };
+  inputEl.addEventListener('input', saveSettings);
+  kindEl.addEventListener('change', saveSettings);
 
   // on change, not input: typing "16" would first broadcast "1", clamped to
   // 10, to every open note tab
