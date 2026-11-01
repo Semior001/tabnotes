@@ -36,9 +36,17 @@ body {
   gap: var(--space-3);
 }
 
+.header {
+  position: relative;
+}
+
+.header .title,
+.header .title-input {
+  font-size: 1.2em;
+}
+
 .header .title {
   overflow: hidden;
-  font-size: 1.2em;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -50,12 +58,7 @@ body {
 .header .title-input {
   flex: 1;
   min-width: 0;
-  font-size: 1.2em;
   font-weight: bold;
-}
-
-.header {
-  position: relative;
 }
 
 /* out of flow: moving the panes on open and close would send the mouseup of a

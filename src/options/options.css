@@ -24,7 +24,7 @@ body {
   width: 8em;
 }
 
-#title-hint {
+.title-hint {
   color: var(--color-muted);
 }
 

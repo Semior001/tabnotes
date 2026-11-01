@@ -35,6 +35,7 @@ interface TitleVars {
   host: string;
 }
 
+// TITLE_HINT lists what expandTitle accepts, for Settings and the rename input
 export const TITLE_HINT = 'Variables: {date}, {time}, {weekday}, {tab} (the tab the note was opened from), {host} (its hostname). '
   + 'Functions: trunc N, lower, upper, as in {tab | trunc 30}.';
 
@@ -220,6 +221,14 @@ export function newNote(title: string, now: number): LiveNote {
 export function edit(note: Note, content: string, now: number): Note | null {
   if (!content.trim() && note.deletedAt === null) return null;
   return { ...note, content, updatedAt: now };
+}
+
+// rename returns the renamed note, or null for an empty title. The stamp stays
+// above updatedAt: a tab adopts an equal one, so the echo of an earlier write
+// would take the title back.
+export function rename(note: Note, title: string, now: number): Note | null {
+  if (title === '') return null;
+  return { ...note, title, updatedAt: Math.max(now, note.updatedAt + 1) };
 }
 
 export function trash(note: Note, now: number): BinnedNote {

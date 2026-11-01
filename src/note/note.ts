@@ -24,7 +24,7 @@ import 'codemirror/addon/dialog/dialog.js';
 import 'codemirror/addon/search/searchcursor.js';
 import 'codemirror/addon/search/search.js';
 import {
-  noteIdFromUrl, storageKey, newNote, edit, restore, daysLeftText, createDebouncer, canOpen, previewExtension,
+  noteIdFromUrl, storageKey, newNote, edit, rename, restore, daysLeftText, createDebouncer, canOpen, previewExtension,
   toggleWrap, linkText, fontSizeFrom, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, imageKey,
   imageIdFromHref, imageHTML, imageMarkdown, imageLabel, checkImageFiles, pasteIsText, themeFrom, isDarkTheme,
   STORAGE_FULL_HINT, DEFAULT_TITLE, TITLE_HINT, titleVars, expandTitle, type ImageValue,
@@ -140,8 +140,11 @@ declare const mermaid: typeof import('mermaid').default;
   const initial: Note | undefined = early ? early.newValue : stored[key];
   const defaultTitle = (stored.settings as Settings | undefined)?.defaultTitle || DEFAULT_TITLE;
   let note: Note = initial || newNote(expandTitle(defaultTitle, titleVars(new Date(), source)) || DEFAULT_TITLE, Date.now());
-  document.title = note.title;
-  titleEl.textContent = note.title;
+  const showTitle = () => {
+    titleEl.textContent = note.title;
+    document.title = note.title;
+  };
+  showTitle();
   titleHint.textContent = TITLE_HINT;
   contentEl.value = note.content;
   // a change that landed during the load is newer than the loaded value
@@ -241,10 +244,6 @@ declare const mermaid: typeof import('mermaid').default;
     $('bin-text').textContent = `This note is in the bin (${daysLeftText(note, Date.now())})`;
   };
   showBin();
-  const showTitle = () => {
-    titleEl.textContent = note.title;
-    document.title = note.title;
-  };
   // a binned note left open for days would show a stale count
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden && !stopped) showBin();
@@ -266,7 +265,7 @@ declare const mermaid: typeof import('mermaid').default;
   };
   const saver = createDebouncer(() => {
     if (stopped) return;
-    // never below a stamp commitRename set in this millisecond
+    // never below a stamp rename set in this millisecond
     const next = edit(note, cm!.getValue(), Math.max(Date.now(), note.updatedAt));
     if (next === null) {
       lastWrite = browser.storage.local.remove(key).then(hideSaveError).catch(saveFailed('remove note'));
@@ -586,22 +585,19 @@ declare const mermaid: typeof import('mermaid').default;
     titleInput.focus();
     titleInput.select();
   };
-  // text equal to what was opened, surrounding spaces aside, is left alone:
-  // expanding it again would change a stored title holding braces, and writing it
-  // would revert a rename adopted while the input was open. The save is flushed as a pending one could be
-  // dropped as older than a restore, or lose the title to another tab's save.
-  // The stamp is above the last write, here as edit does not stamp a blank note
-  // and a clock can repeat: onChange adopts an equal updatedAt, as restore and
-  // trash keep it, so the echo of that write would take the title back.
   const commitRename = () => {
     if (renaming === null) return;
     const opened = renaming;
     closeRename();
+    // re-expanding unchanged text would alter a stored title holding braces,
+    // and writing it would revert a rename adopted while the input was open
     if (titleInput.value.trim() === opened.trim()) return;
-    const title = expandTitle(titleInput.value, titleVars(new Date(), source));
-    if (title === '') return;
-    note = { ...note, title, updatedAt: Math.max(Date.now(), note.updatedAt + 1) };
+    const next = rename(note, expandTitle(titleInput.value, titleVars(new Date(), source)), Date.now());
+    if (next === null) return;
+    note = next;
     showTitle();
+    // flushed: left pending, it is dropped as older than a restore, or another
+    // tab's save takes the title back
     saver.schedule();
     saver.flush();
   };

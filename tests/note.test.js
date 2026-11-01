@@ -499,12 +499,14 @@ const holdRun = (mermaid) => {
 // browser API, and resolves once the page's async setup has finished.
 // storage is the initial storage.local content; the hidden state mirrors
 // note.html, which the 'note.html' test asserts. tab is what tabs.getCurrent
-// resolves to, and sourceTab what tabs.get resolves to. With holdLoad the storage read stays pending until
-// releaseLoad(); with holdWrites every set/remove stays pending until
-// releaseWrites(); with holdSource tabs.get stays pending until releaseSource().
+// resolves to, and sourceTab what tabs.get resolves to. With holdLoad the
+// storage read stays pending until releaseLoad(); with holdWrites every
+// set/remove stays pending until releaseWrites(); with holdSource tabs.get
+// stays pending until releaseSource().
 // layout overrides the fake sizes of its editor and preview.
-// imageReads steers reads of image: keys only, so the note still loads: with hold they stay pending until releaseImages(), with fail
-// they reject; the test may flip both while the page runs. fileReads.hold keeps
+// imageReads steers reads of image: keys only, so the note still loads: with
+// hold they stay pending until releaseImages(), with fail they reject; the
+// test may flip both while the page runs. fileReads.hold keeps
 // FileReader reads pending until releaseFiles(); a file with fail: true fails
 // its read, and filesRead lists the names of the reads started. A file's data
 // URL is data:<type>;base64,<name>. A write that lands updates storage.

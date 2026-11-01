@@ -6,7 +6,7 @@ const { marked, Marked } = require('marked');
 
 const {
   canOpen, createDebouncer, storageKey, idFromStorageKey, noteIdFromUrl, noteUrl, notesFromStorage,
-  newNote, edit, trash, restore, daysLeft, daysLeftText, expired, classify, matches, escapeHTML, plainPreview, rowText, searchParts, selectRange, shortDate, DEFAULT_TITLE,
+  newNote, edit, rename, trash, restore, daysLeft, daysLeftText, expired, classify, matches, escapeHTML, plainPreview, rowText, searchParts, selectRange, shortDate, DEFAULT_TITLE,
   codeBlockHTML, previewExtension, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, toggleWrap, linkText, fontSizeFrom, themeFrom, isDarkTheme,
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameOrphans,
@@ -203,6 +203,26 @@ test('newNote, edit, trash, restore', async (t) => {
     assert.deepEqual(edit(n, '', 2), { title: 'T', content: '', updatedAt: 2, deletedAt: 1 });
   });
 
+  await t.test('rename sets the title and stamps now', () => {
+    const n = { title: 'T', content: 'x', updatedAt: 1, deletedAt: null };
+    assert.deepEqual(rename(n, 'U', 5), { title: 'U', content: 'x', updatedAt: 5, deletedAt: null });
+  });
+
+  await t.test('rename stamps above updatedAt on a repeated or lagging clock', () => {
+    const n = newNote('T', 5);
+    assert.equal(rename(n, 'U', 5).updatedAt, 6);
+    assert.equal(rename(n, 'U', 3).updatedAt, 6);
+  });
+
+  await t.test('rename to an empty title returns null', () => {
+    assert.equal(rename(newNote('T', 1), '', 2), null);
+  });
+
+  await t.test('rename keeps a binned note binned', () => {
+    const n = { title: 'T', content: 'x', updatedAt: 1, deletedAt: 1 };
+    assert.equal(rename(n, 'U', 2).deletedAt, 1);
+  });
+
   await t.test('trash and restore', () => {
     const n = { title: 'T', content: 'x', updatedAt: 1, deletedAt: null };
     const binned = trash(n, 9);
@@ -215,6 +235,7 @@ test('newNote, edit, trash, restore', async (t) => {
     const snapshot = structuredClone(n);
     edit(n, 'y', 2);
     edit(n, '', 3);
+    rename(n, 'U', 2);
     trash(n, 4);
     restore(trash(n, 4));
     assert.deepEqual(n, snapshot);
