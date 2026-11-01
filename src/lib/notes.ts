@@ -172,6 +172,9 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 const BIN_DAYS = 30;
 const TEMPORARY_DAYS = 30;
 const EXPIRED_BIN_DAYS = 7;
+
+// KIND_HINT is the tooltip of the kind button on the note page
+export const KIND_HINT = `Temporary notes move to the Bin after ${TEMPORARY_DAYS} days closed and are deleted ${EXPIRED_BIN_DAYS} days later. Click to switch.`;
 const IMAGE_GRACE_DAYS = 7;
 const FONT_SIZE_DEFAULT = 14;
 const FONT_SIZE_MIN = 10;

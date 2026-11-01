@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { bundle } = require('./bundle.js');
-const { STORAGE_FULL_HINT, TITLE_HINT } = require('../src/lib/notes.ts');
+const { STORAGE_FULL_HINT, TITLE_HINT, KIND_HINT } = require('../src/lib/notes.ts');
 
 const root = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
@@ -541,6 +541,7 @@ async function runNote({
     title: element({ parent: page, role: 'button', tabindex: '0', title: 'Rename' }, focus),
     'title-input': element({ hidden: true, parent: page }, focus),
     'title-hint': element({ hidden: true, parent: page }, focus),
+    kind: element({ parent: page }, focus),
     mode: element({ textContent: 'Split', parent: page }, focus),
     'all-notes': element({ parent: page }, focus),
     settings: element({ parent: page }, focus),
@@ -759,6 +760,7 @@ test('note.html loads its scripts and starts with the harness state', () => {
     title: false,
     'title-input': true,
     'title-hint': true,
+    kind: false,
     mode: false,
     'all-notes': false,
     settings: false,
@@ -2111,6 +2113,170 @@ test('note page', async (t) => {
     els.restore.dispatch('click');
     assert.equal(els.bin.hidden, true);
     assert.deepEqual(writes(), [['storage.local.remove', KEY]]);
+  });
+
+  await t.test('kind', async (t) => {
+    const temporary = { temporary: true };
+    const hasKind = (w) => Object.hasOwn(w[1][KEY], 'temporary');
+
+    await t.test('the button shows the kind and explains it', async (t) => {
+      const cases = [
+        { name: 'permanent', extra: {}, label: 'Permanent' },
+        { name: 'temporary', extra: temporary, label: 'Temporary' },
+      ];
+      for (const c of cases) {
+        await t.test(c.name, async () => {
+          const { els } = await runNote({ storage: { [KEY]: stored('a', c.extra) } });
+          assert.equal(els.kind.hidden, false);
+          assert.equal(els.kind.textContent, c.label);
+          assert.equal(els.kind.title, KIND_HINT);
+        });
+      }
+    });
+
+    await t.test('a toggle writes at once, with unsaved editor content, leaving nothing pending', async (t) => {
+      await t.test('to temporary', async () => {
+        const { els, writes, clock, type } = await runNote({ storage: { [KEY]: stored('a') } });
+        type('ab');
+        els.kind.dispatch('click');
+        assert.equal(els.kind.textContent, 'Temporary');
+        assert.deepEqual(writes(), [
+          ['storage.local.set', { [KEY]: stored('ab', { updatedAt: 1000, temporary: true }) }],
+        ]);
+        clock.run();
+        assert.equal(writes().length, 1);
+      });
+
+      await t.test('to permanent removes the key', async () => {
+        const { els, writes } = await runNote({ storage: { [KEY]: stored('a', temporary) } });
+        els.kind.dispatch('click');
+        assert.equal(els.kind.textContent, 'Permanent');
+        assert.equal(writes().length, 1);
+        assert.equal(hasKind(writes()[0]), false);
+      });
+    });
+
+    await t.test('a toggle stamps above the stored updatedAt', async () => {
+      const { els, writes } = await runNote({ storage: { [KEY]: stored('a', { updatedAt: 5000 }) } });
+      els.kind.dispatch('click');
+      assert.equal(writes()[0][1][KEY].updatedAt, 5001);
+    });
+
+    await t.test('the echo of an earlier write does not take a toggle back', async () => {
+      const { els, change } = await runNote({ storage: { [KEY]: stored('a', { updatedAt: 5000 }) } });
+      els.kind.dispatch('click');
+      change({ [KEY]: { newValue: stored('a', { updatedAt: 5000 }) } });
+      assert.equal(els.kind.textContent, 'Temporary');
+    });
+
+    await t.test('a failed write shows the save error', async () => {
+      const { els, warnings } = await runNote({
+        storage: { [KEY]: stored('a') },
+        reject: { 'storage.local.set': true },
+      });
+      els.kind.dispatch('click');
+      await settle();
+      assert.equal(els['save-error'].hidden, false);
+      assert.equal(warnings[0][0], 'tabnotes: save note:');
+    });
+
+    await t.test('a change from another tab is adopted', async (t) => {
+      const cases = [
+        { name: 'nothing pending, to temporary', from: {}, to: temporary, label: 'Temporary', text: 'more' },
+        { name: 'nothing pending, to permanent', from: temporary, to: {}, label: 'Permanent', text: 'more' },
+        { name: 'save pending, to temporary', pending: true, from: {}, to: temporary, label: 'Temporary', text: 'mine' },
+        { name: 'save pending, to permanent', pending: true, from: temporary, to: {}, label: 'Permanent', text: 'mine' },
+      ];
+      for (const c of cases) {
+        await t.test(c.name, async () => {
+          const { els, writes, clock, type, change } = await runNote({ storage: { [KEY]: stored('a', c.from) } });
+          if (c.pending) type(c.text);
+          change({ [KEY]: { newValue: stored('theirs', { updatedAt: 2, ...c.to }) } });
+          assert.equal(els.kind.textContent, c.label);
+          if (!c.pending) type(c.text);
+          clock.run();
+          // the save carries the adopted kind, with no undefined key in it
+          assert.deepEqual(writes(), [
+            ['storage.local.set', { [KEY]: stored(c.text, { updatedAt: 1000, ...c.to }) }],
+          ]);
+          assert.equal(hasKind(writes()[0]), c.to === temporary);
+        });
+      }
+    });
+
+    await t.test('an expiry landing during a pending save keeps its 7 days', async () => {
+      const { els, writes, clock, type, change } = await runNote({ storage: { [KEY]: stored('a', temporary) } });
+      type('ab');
+      change({ [KEY]: { newValue: stored('a', { ...temporary, deletedAt: 900, binDays: 7 }) } });
+      assert.equal(els['bin-text'].textContent, 'This note is in the bin (7 days left)');
+      assert.equal(els.kind.hidden, true);
+      clock.run();
+      assert.deepEqual(writes(), [
+        ['storage.local.set', { [KEY]: stored('ab', { ...temporary, updatedAt: 1000, deletedAt: 900, binDays: 7 }) }],
+      ]);
+    });
+
+    await t.test('an auto-expired note banner shows 7 days', async () => {
+      const { els } = await runNote({
+        storage: { [KEY]: stored('a', { ...temporary, deletedAt: 1000, binDays: 7 }) },
+      });
+      assert.equal(els['bin-text'].textContent, 'This note is in the bin (7 days left)');
+    });
+
+    await t.test('Restore shows the button, keeps the kind and ends the short stay', async () => {
+      const { els, writes } = await runNote({
+        storage: { [KEY]: stored('a', { ...temporary, deletedAt: 5, binDays: 7 }) },
+      });
+      assert.equal(els.kind.hidden, true);
+      els.restore.dispatch('click');
+      assert.equal(els.kind.hidden, false);
+      assert.equal(els.kind.textContent, 'Temporary');
+      assert.deepEqual(writes(), [
+        ['storage.local.set', { [KEY]: stored('a', { ...temporary, updatedAt: 1000 }) }],
+      ]);
+    });
+
+    await t.test('a trash and a restore from elsewhere move the button', async () => {
+      const { els, change } = await runNote({ storage: { [KEY]: stored('a') } });
+      change({ [KEY]: { newValue: stored('a', { deletedAt: 900 }) } });
+      assert.equal(els.kind.hidden, true);
+      change({ [KEY]: { newValue: stored('a') } });
+      assert.equal(els.kind.hidden, false);
+    });
+
+    await t.test('a blank note keeps its kind in memory and stores nothing', async () => {
+      const { els, writes, clock, type } = await runNote();
+      els.kind.dispatch('click');
+      assert.equal(els.kind.textContent, 'Temporary');
+      assert.deepEqual(writes(), [['storage.local.remove', KEY]]);
+      type('hi');
+      clock.run();
+      assert.equal(writes()[1][1][KEY].temporary, true);
+    });
+
+    await t.test('a binned tab does not toggle', async () => {
+      const { els, writes } = await runNote({ storage: { [KEY]: stored('a', { deletedAt: 5 }) } });
+      els.kind.dispatch('click');
+      assert.equal(els.kind.textContent, 'Permanent');
+      assert.deepEqual(writes(), []);
+    });
+
+    await t.test('a stopped tab hides the button and does not toggle', async () => {
+      const { els, doc, writes, message } = await runNote({ storage: { [KEY]: stored('a') }, tab: { id: 7 } });
+      await message({ type: 'stop', id: ID, tabId: 7 })[0];
+      assert.equal(els.kind.hidden, true);
+      doc.dispatch('visibilitychange');
+      assert.equal(els.kind.hidden, true);
+      els.kind.dispatch('click');
+      assert.equal(els.kind.textContent, 'Permanent');
+      assert.deepEqual(writes(), []);
+    });
+
+    await t.test('a removal of a binned note hides the button', async () => {
+      const { els, change } = await runNote({ storage: { [KEY]: stored('a', { deletedAt: 5 }) } });
+      change({ [KEY]: { newValue: undefined } });
+      assert.equal(els.kind.hidden, true);
+    });
   });
 
   await t.test('trash from elsewhere with nothing pending shows the banner', async () => {

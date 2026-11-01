@@ -10,7 +10,7 @@ const {
   codeBlockHTML, previewExtension, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, toggleWrap, linkText, fontSizeFrom, themeFrom, isDarkTheme,
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameFirstSeen,
-  titleVars, expandTitle, TITLE_HINT,
+  titleVars, expandTitle, TITLE_HINT, KIND_HINT,
   setTemporary, expire, temporaryFromUrl, sweepClosed, closedAfterFailedWrite, closedDaysLeft,
 } = require('../src/lib/notes.ts');
 
@@ -1190,6 +1190,10 @@ test('checkImageFiles', async (t) => {
     const got = checkImageFiles([file('', 'image/png', MAX_IMAGE_BYTES + 1)]);
     assert.deepEqual(got.problems, ['image is over the 25 MB limit.']);
   });
+});
+
+test('KIND_HINT states the days expiry applies', () => {
+  assert.match(KIND_HINT, /after 30 days closed and are deleted 7 days later/);
 });
 
 test('STORAGE_FULL_HINT states the grace sweepImages applies', () => {

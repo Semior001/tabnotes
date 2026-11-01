@@ -27,7 +27,8 @@ import {
   noteIdFromUrl, storageKey, newNote, edit, rename, restore, daysLeftText, createDebouncer, canOpen, previewExtension,
   toggleWrap, linkText, fontSizeFrom, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, imageKey,
   imageIdFromHref, imageHTML, imageMarkdown, imageLabel, checkImageFiles, pasteIsText, themeFrom, isDarkTheme,
-  STORAGE_FULL_HINT, DEFAULT_TITLE, TITLE_HINT, titleVars, expandTitle, temporaryFromUrl, type ImageValue,
+  STORAGE_FULL_HINT, DEFAULT_TITLE, TITLE_HINT, KIND_HINT, titleVars, expandTitle, temporaryFromUrl, setTemporary,
+  type ImageValue,
   type Note, type NoteChange, type Pane, type Settings, type StopMessage, type ThemeMode,
 } from '../lib/notes.ts';
 
@@ -43,6 +44,7 @@ declare const mermaid: typeof import('mermaid').default;
   const titleEl = $('title');
   const titleInput = $<HTMLInputElement>('title-input');
   const titleHint = $('title-hint');
+  const kindEl = $('kind');
   const SAVE_DELAY_MS = 500;
   const PREVIEW_DELAY_MS = 150;
   const COPIED_MS = 1500;
@@ -151,6 +153,7 @@ declare const mermaid: typeof import('mermaid').default;
   };
   showTitle();
   titleHint.textContent = TITLE_HINT;
+  kindEl.title = KIND_HINT;
   contentEl.value = note.content;
   // a change that landed during the load is newer than the loaded value
   if (!fontChanged) applyFont(stored.fontSize);
@@ -241,10 +244,13 @@ declare const mermaid: typeof import('mermaid').default;
     titleEl.removeAttribute('tabindex');
     titleEl.removeAttribute('title');
     $('bin').hidden = true;
+    kindEl.hidden = true;
     $('deleted').hidden = false;
   };
   const showBin = () => {
     $('bin').hidden = note.deletedAt === null;
+    kindEl.hidden = note.deletedAt !== null;
+    kindEl.textContent = note.temporary ? 'Temporary' : 'Permanent';
     if (note.deletedAt === null) return;
     $('bin-text').textContent = `This note is in the bin (${daysLeftText(note, Date.now())})`;
   };
@@ -580,6 +586,16 @@ declare const mermaid: typeof import('mermaid').default;
     saver.flush();
   });
 
+  // flushed like a rename: left pending, a restore from All notes or another
+  // tab's save would take the kind back
+  kindEl.addEventListener('click', () => {
+    if (stopped || note.deletedAt !== null) return;
+    note = setTemporary(note, !note.temporary, Date.now());
+    showBin();
+    saver.schedule();
+    saver.flush();
+  });
+
   const openRename = () => {
     if (stopped) return;
     renaming = note.title;
@@ -647,7 +663,7 @@ declare const mermaid: typeof import('mermaid').default;
     return lastWrite.then(() => true);
   });
 
-  // storage is the source of truth for the bin state and the title: both are
+  // storage is the source of truth for the bin state, title and kind: all are
   // always adopted, so a pending save keeps them; content only when nothing is
   // pending, so typing is never overwritten (this tab's own echoes are then
   // no-ops). An open rename input keeps its text. A value older than the
@@ -664,7 +680,7 @@ declare const mermaid: typeof import('mermaid').default;
     }
     if (newValue.updatedAt < note.updatedAt) return;
     if (saver.pending()) {
-      note = { ...note, deletedAt: newValue.deletedAt, title: newValue.title };
+      note = { ...newValue, content: note.content };
       showBin();
       showTitle();
       return;
