@@ -11,6 +11,7 @@ const {
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameOrphans,
   titleVars, expandTitle, TITLE_HINT,
+  setTemporary, expire, temporaryFromUrl, sweepClosed, closedAfterFailedWrite, closedDaysLeft,
 } = require('../src/lib/notes.ts');
 
 test('canOpen', async (t) => {
@@ -1430,4 +1431,179 @@ test('TITLE_HINT names every variable and function, and no URL', () => {
     assert.ok(TITLE_HINT.includes(name), name);
   }
   assert.doesNotMatch(TITLE_HINT, /https?:\/\//);
+});
+
+test('noteUrl with a kind', async (t) => {
+  const cases = [
+    ['no kind', undefined, `${BASE}?id=${ID1}`, null],
+    ['temporary', true, `${BASE}?id=${ID1}&temporary=1`, true],
+    ['permanent', false, `${BASE}?id=${ID1}&temporary=0`, false],
+  ];
+  for (const [name, kind, url, parsed] of cases) {
+    await t.test(name, () => {
+      assert.equal(noteUrl(BASE, ID1, kind), url);
+      assert.equal(noteIdFromUrl(url, BASE), ID1);
+      assert.equal(temporaryFromUrl(url), parsed);
+    });
+  }
+});
+
+test('temporaryFromUrl ignores an invalid parameter', async (t) => {
+  for (const value of ['', '2', 'true', 'false', '01', 'TRUE']) {
+    await t.test(`temporary=${value}`, () => {
+      assert.equal(temporaryFromUrl(`${BASE}?id=${ID1}&temporary=${value}`), null);
+    });
+  }
+});
+
+test('note kind', async (t) => {
+  await t.test('newNote adds the key only when temporary', () => {
+    assert.deepEqual(newNote('T', 5, true), { title: 'T', content: '', updatedAt: 5, deletedAt: null, temporary: true });
+    assert.equal(Object.hasOwn(newNote('T', 5, false), 'temporary'), false);
+    assert.equal(Object.hasOwn(newNote('T', 5), 'temporary'), false);
+  });
+
+  await t.test('setTemporary sets and removes the key', () => {
+    const note = { ...newNote('T', 5), content: 'x' };
+    const made = setTemporary(note, true, 9);
+    assert.deepEqual(made, { ...note, updatedAt: 9, temporary: true });
+    const back = setTemporary(made, false, 12);
+    assert.deepEqual(back, { ...note, updatedAt: 12 });
+    assert.equal(Object.hasOwn(back, 'temporary'), false);
+  });
+
+  await t.test('setTemporary keeps the stamp above updatedAt', () => {
+    assert.equal(setTemporary(newNote('T', 5), true, 5).updatedAt, 6);
+    assert.equal(setTemporary(newNote('T', 5), true, 3).updatedAt, 6);
+  });
+
+  await t.test('setTemporary does not mutate the note', () => {
+    const note = Object.freeze(newNote('T', 5, true));
+    setTemporary(note, false, 9);
+    assert.equal(note.temporary, true);
+  });
+
+  await t.test('edit, rename and trash keep the kind', () => {
+    const note = newNote('T', 1, true);
+    assert.equal(edit(note, 'x', 2).temporary, true);
+    assert.equal(rename(note, 'U', 2).temporary, true);
+    assert.equal(trash(note, 2).temporary, true);
+  });
+});
+
+test('expire', async (t) => {
+  const now = 1000 * DAY;
+  const note = { ...newNote('T', 1, true), content: 'x' };
+
+  await t.test('bins the note for 7 days', () => {
+    assert.deepEqual(expire(note, now), { ...note, deletedAt: now, binDays: 7 });
+  });
+
+  await t.test('daysLeft honours binDays', () => {
+    const binned = expire(note, now);
+    assert.equal(daysLeft(binned, now), 7);
+    assert.equal(daysLeft(binned, now + 7 * DAY - 1), 1);
+    assert.equal(daysLeft(binned, now + 7 * DAY), 0);
+    assert.equal(expired(binned, now + 7 * DAY - 1), false);
+    assert.equal(expired(binned, now + 7 * DAY), true);
+    assert.equal(daysLeftText(binned, now), '7 days left');
+  });
+
+  await t.test('a note binned by hand stays 30 days, for both kinds', () => {
+    for (const binned of [trash(note, now), trash(newNote('T', 1), now)]) {
+      assert.equal(Object.hasOwn(binned, 'binDays'), false);
+      assert.equal(daysLeft(binned, now), 30);
+      assert.equal(expired(binned, now + 7 * DAY), false);
+    }
+  });
+
+  await t.test('restore drops binDays and keeps the kind', () => {
+    const restored = restore(expire(note, now));
+    assert.deepEqual(restored, note);
+    assert.equal(Object.hasOwn(restored, 'binDays'), false);
+  });
+
+  await t.test('a restored note binned by hand gets the full stay', () => {
+    assert.equal(daysLeft(trash(restore(expire(note, now)), now), now), 30);
+  });
+});
+
+test('sweepClosed', async (t) => {
+  const now = 1000 * DAY;
+  const temp = (updatedAt = now - 100 * DAY) => ({ ...newNote('T', updatedAt, true), content: 'x' });
+  const none = new Set();
+
+  await t.test('a closed temporary note enters with the time of the sweep', () => {
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, {}, now), { closed: { [ID1]: now }, expire: [] });
+  });
+
+  await t.test('a known note keeps its first sighting', () => {
+    const closed = { [ID1]: now - DAY };
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, closed, now), { closed, expire: [] });
+  });
+
+  await t.test('an old note with no entry is not due on its first sighting', () => {
+    assert.deepEqual(sweepClosed({ [ID1]: temp(0) }, none, {}, now).expire, []);
+  });
+
+  const { temporary: _, ...stored } = temp();
+  const leaves = [
+    ['a note with no temporary field', stored, none],
+    ['a permanent note', { ...newNote('T', 0), content: 'x' }, none],
+    ['a binned note', trash(temp(), now - 40 * DAY), none],
+    ['a reopened note', temp(), new Set([ID1])],
+  ];
+  for (const [name, note, open] of leaves) {
+    await t.test(`${name} leaves the map and is not due`, () => {
+      assert.deepEqual(sweepClosed({ [ID1]: note }, open, { [ID1]: now - 40 * DAY }, now), { closed: {}, expire: [] });
+    });
+  }
+
+  await t.test('a removed note leaves the map', () => {
+    assert.deepEqual(sweepClosed({}, none, { [ID1]: now - 40 * DAY }, now), { closed: {}, expire: [] });
+  });
+
+  await t.test('the note is due exactly at 30 days', () => {
+    const before = { [ID1]: now - 30 * DAY + 1 };
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, before, now), { closed: before, expire: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, { [ID1]: now - 30 * DAY }, now), { closed: {}, expire: [ID1] });
+  });
+
+  await t.test('updatedAt postpones expiry and keeps the first sighting', () => {
+    const closed = { [ID1]: now - 40 * DAY };
+    assert.deepEqual(sweepClosed({ [ID1]: temp(now - DAY) }, none, closed, now), { closed, expire: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp(now - 30 * DAY) }, none, closed, now), { closed: {}, expire: [ID1] });
+  });
+
+  await t.test('each note is decided on its own', () => {
+    const notes = { [ID1]: temp(), [ID2]: temp(), [ID3]: temp(), [ID4]: newNote('T', 0) };
+    const closed = { [ID1]: now - 31 * DAY, [ID2]: now - 31 * DAY };
+    assert.deepEqual(sweepClosed(notes, new Set([ID2]), closed, now), { closed: { [ID3]: now }, expire: [ID1] });
+  });
+});
+
+test('closedAfterFailedWrite keeps a failed id with its first sighting', () => {
+  const closed = { [ID1]: 10, [ID2]: 20, [ID3]: 30 };
+  const sweep = { closed: { [ID3]: 30 }, expire: [ID1, ID2] };
+  assert.deepEqual(closedAfterFailedWrite(sweep, [ID2], closed), { [ID2]: 20, [ID3]: 30 });
+  assert.deepEqual(closedAfterFailedWrite(sweep, [], closed), { [ID3]: 30 });
+  assert.deepEqual(sweep.closed, { [ID3]: 30 });
+});
+
+test('closedDaysLeft', async (t) => {
+  const now = 1000 * DAY;
+  const note = newNote('T', now - 100 * DAY, true);
+  const cases = [
+    ['no sighting yet', undefined, note, 30],
+    ['just seen', now, note, 30],
+    ['one day in', now - DAY, note, 29],
+    ['a moment before the end', now - 30 * DAY + 1, note, 1],
+    ['at the end', now - 30 * DAY, note, 0],
+    ['past the end', now - 40 * DAY, note, 0],
+    ['an edit after the sighting counts', now - 20 * DAY, { ...note, updatedAt: now - 5 * DAY }, 25],
+    ['an edit does not add days past a full clock', undefined, { ...note, updatedAt: now - 5 * DAY }, 30],
+  ];
+  for (const [name, firstSeen, n, want] of cases) {
+    await t.test(name, () => assert.equal(closedDaysLeft(firstSeen, n, now), want));
+  }
 });

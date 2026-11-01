@@ -4,15 +4,18 @@
 import type { MarkedExtension, Token, Tokens } from 'marked';
 
 // LiveNote and BinnedNote split on deletedAt, so the bin countdown can only be
-// asked of a note known to be binned.
-interface LiveNote {
+// asked of a note known to be binned. temporary is absent on a permanent note,
+// never false, so notes stored before the flag existed stay permanent.
+export interface LiveNote {
   title: string;
   content: string;
   updatedAt: number;
   deletedAt: null;
+  temporary?: true;
 }
 
-export type BinnedNote = Omit<LiveNote, 'deletedAt'> & { deletedAt: number };
+// binDays is set only on an auto-expired note; absent means BIN_DAYS
+export type BinnedNote = Omit<LiveNote, 'deletedAt'> & { deletedAt: number; binDays?: number };
 
 export type Note = LiveNote | BinnedNote;
 
@@ -23,6 +26,7 @@ export interface NoteChange {
 
 export interface Settings {
   defaultTitle: string;
+  temporary?: true;
 }
 
 export const DEFAULT_TITLE = 'Notes';
@@ -60,6 +64,17 @@ export type ImageOrphans = Record<string, number>;
 export interface ImageSweep {
   remove: string[];
   orphans: ImageOrphans;
+}
+
+// ClosedNotes maps a live temporary note to the time a sweep first found it
+// with no open tab; the background page is its only writer.
+export type ClosedNotes = Record<string, number>;
+
+// ClosedSweep is what a sweep decided: the ids to bin, and the map as it should
+// stand once they are binned.
+interface ClosedSweep {
+  closed: ClosedNotes;
+  expire: string[];
 }
 
 // StopMessage asks a note tab to flush and stop writing, see All notes
@@ -155,6 +170,8 @@ const IMAGE_REF_RE = new RegExp(`${IMAGE_SCHEME}(${ID_CHARS})`, 'g');
 const MINUTE_MS = 60 * 1000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 const BIN_DAYS = 30;
+const TEMPORARY_DAYS = 30;
+const EXPIRED_BIN_DAYS = 7;
 const IMAGE_GRACE_DAYS = 7;
 const FONT_SIZE_DEFAULT = 14;
 const FONT_SIZE_MIN = 10;
@@ -196,9 +213,21 @@ export function noteIdFromUrl(url: string | undefined, noteBase: string): string
   return id !== null && ID_RE.test(id) ? id : null;
 }
 
-// noteUrl is the note-page URL of a note, the inverse of noteIdFromUrl
-export function noteUrl(noteBase: string, id: string): string {
-  return noteBase + '?id=' + id;
+// noteUrl is the note-page URL of a note, the inverse of noteIdFromUrl. With no
+// temporary the note page picks the kind from settings.
+export function noteUrl(noteBase: string, id: string, temporary?: boolean): string {
+  const url = noteBase + '?id=' + id;
+  return temporary === undefined ? url : `${url}&temporary=${temporary ? 1 : 0}`;
+}
+
+// temporaryFromUrl reads the kind noteUrl put into a note-page URL, or null
+// with no valid parameter.
+export function temporaryFromUrl(url: string): boolean | null {
+  switch (new URL(url).searchParams.get('temporary')) {
+    case '1': return true;
+    case '0': return false;
+    default: return null;
+  }
 }
 
 // notesFromStorage picks the note entries out of a storage.local.get result
@@ -212,8 +241,9 @@ export function notesFromStorage(stored: Record<string, unknown>): Record<string
   return notes;
 }
 
-export function newNote(title: string, now: number): LiveNote {
-  return { title, content: '', updatedAt: now, deletedAt: null };
+export function newNote(title: string, now: number, temporary = false): LiveNote {
+  const note: LiveNote = { title, content: '', updatedAt: now, deletedAt: null };
+  return temporary ? { ...note, temporary: true } : note;
 }
 
 // edit returns the edited note, or null when the note should be removed:
@@ -231,16 +261,41 @@ export function rename(note: Note, title: string, now: number): Note | null {
   return { ...note, title, updatedAt: Math.max(now, note.updatedAt + 1) };
 }
 
+// setTemporary changes the kind. The stamp stays above updatedAt for the same
+// reason as in rename. The same-kind check is the caller's: a stamp here would
+// restart the 30 days.
+export function setTemporary(note: LiveNote, temporary: boolean, now: number): LiveNote {
+  const { temporary: _, ...rest } = note;
+  const stamped: LiveNote = { ...rest, updatedAt: Math.max(now, note.updatedAt + 1) };
+  return temporary ? { ...stamped, temporary: true } : stamped;
+}
+
 export function trash(note: Note, now: number): BinnedNote {
   return { ...note, deletedAt: now };
 }
 
-export function restore(note: Note): LiveNote {
-  return { ...note, deletedAt: null };
+// expire bins a temporary note closed for too long, for a shorter stay than a
+// note binned by hand.
+export function expire(note: LiveNote, now: number): BinnedNote {
+  return { ...trash(note, now), binDays: EXPIRED_BIN_DAYS };
 }
 
+export function restore(note: Note): LiveNote {
+  const { binDays: _, ...rest } = note as BinnedNote;
+  return { ...rest, deletedAt: null };
+}
+
+const daysUntil = (start: number, days: number, now: number) =>
+  Math.max(0, Math.ceil((start + days * DAY_MS - now) / DAY_MS));
+
 export function daysLeft(note: BinnedNote, now: number): number {
-  return Math.max(0, Math.ceil((note.deletedAt + BIN_DAYS * DAY_MS - now) / DAY_MS));
+  return daysUntil(note.deletedAt, note.binDays ?? BIN_DAYS, now);
+}
+
+// closedDaysLeft is the countdown of a closed temporary note. With no sighting
+// yet its clock has not started.
+export function closedDaysLeft(firstSeen: number | undefined, note: Note, now: number): number {
+  return daysUntil(Math.max(firstSeen ?? now, note.updatedAt), TEMPORARY_DAYS, now);
 }
 
 // daysLeftText is the bin countdown shown on the note page and All notes
@@ -751,6 +806,38 @@ export function orphansAfterFailedRemove(sweep: ImageSweep, orphans: ImageOrphan
 export function sameOrphans(a: ImageOrphans, b: ImageOrphans): boolean {
   const entries = Object.entries(a);
   return entries.length === Object.keys(b).length && entries.every(([id, at]) => b[id] === at);
+}
+
+// sweepClosed runs the close clock over stored notes and the ids open in tabs.
+// Only a live temporary note with no tab stays in the map, so one reopened,
+// made permanent, binned or removed leaves it. updatedAt counts because an edit
+// after a reopen between two sweeps shows the note was in use. A note is due
+// only with an entry already old enough, so a first sighting never bins it.
+export function sweepClosed(
+  notes: Record<string, Note>,
+  openIds: Set<string>,
+  closed: ClosedNotes,
+  now: number,
+): ClosedSweep {
+  const sweep: ClosedSweep = { closed: {}, expire: [] };
+  for (const [id, note] of Object.entries(notes)) {
+    if (note.deletedAt !== null || !note.temporary || openIds.has(id)) continue;
+    const firstSeen = closed[id] ?? now;
+    if (now - Math.max(firstSeen, note.updatedAt) >= TEMPORARY_DAYS * DAY_MS) {
+      sweep.expire.push(id);
+      continue;
+    }
+    sweep.closed[id] = firstSeen;
+  }
+  return sweep;
+}
+
+// closedAfterFailedWrite is the map when failedIds could not be binned: an id
+// leaves the map only once its note is binned, so the next sweep retries it.
+export function closedAfterFailedWrite(sweep: ClosedSweep, failedIds: string[], closed: ClosedNotes): ClosedNotes {
+  const kept = { ...sweep.closed };
+  for (const id of failedIds) kept[id] = closed[id];
+  return kept;
 }
 
 // toggleWrap is the replacement for a selection on Ctrl+B (marker '**') or
