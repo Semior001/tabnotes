@@ -358,7 +358,7 @@ type Words = [string, string, string];
     }
     const emptyEl = $('empty');
     emptyEl.hidden = !loaded || shown > 0;
-    emptyEl.textContent = q.trim() ? `No notes match "${q.trim()}".` : 'No notes yet. Create one with New note.';
+    emptyEl.textContent = q.trim() ? `No notes match "${q.trim()}".` : 'No notes yet. Create one with New permanent note or New temporary note.';
     if (focused) rendered.get(focused)?.focus();
     renderBar();
   };
@@ -440,9 +440,11 @@ type Words = [string, string, string];
     render();
     if (inside) $('bin-summary').focus();
   });
-  $('new-note').addEventListener('click', () => {
-    browser.tabs.create({ url: noteUrl(noteBase, crypto.randomUUID()) }).catch(warn('new note'));
-  });
+  for (const kind of ['permanent', 'temporary'] as const) {
+    $(`new-${kind}`).addEventListener('click', () => {
+      browser.tabs.create({ url: noteUrl(noteBase, crypto.randomUUID(), kind === 'temporary') }).catch(warn(`new ${kind} note`));
+    });
+  }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && selected.size > 0) {
       clearSelection();

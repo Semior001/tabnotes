@@ -202,7 +202,7 @@ mark {
     display: none;
   }
 
-  /* the title and both header controls leave the search field no room */
+  /* the title and the header controls leave the search field no room */
   .header {
     flex-wrap: wrap;
   }

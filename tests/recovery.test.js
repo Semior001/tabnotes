@@ -135,7 +135,8 @@ async function runRecovery({
     settings: make(),
     empty: make({ hidden: true }),
     bar: make({ hidden: true }),
-    'new-note': make(),
+    'new-permanent': make(),
+    'new-temporary': make(),
     'bar-count': make(),
     'bar-move': make(),
     'bar-restore': make(),
@@ -313,7 +314,7 @@ test('recovery.html loads its scripts and starts with the harness state', () => 
   assert.deepEqual(srcs, ['../theme.js', 'recovery.js']);
   const hidden = ['error', 'empty', 'bar', 'status', 'status-undo'];
   const ids = [
-    'header', 'search', 'new-note', 'settings', ...hidden, 'bar-count', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear',
+    'header', 'search', 'new-permanent', 'new-temporary', 'settings', ...hidden, 'bar-count', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear',
     'status-text', 'bin-details', 'bin-summary', 'empty-bin',
   ];
   for (const s of ['open', 'recent', 'other', 'bin']) {
@@ -381,7 +382,7 @@ test('recovery', async (t) => {
       assert.equal(els[`${s}-section`].hidden, true, s);
     }
     assert.equal(els.empty.hidden, false);
-    assert.match(els.empty.textContent, /^No notes yet/);
+    assert.equal(els.empty.textContent, 'No notes yet. Create one with New permanent note or New temporary note.');
   });
 
   await t.test('a search with no hits says so, as text', async () => {
@@ -1149,19 +1150,21 @@ test('recovery', async (t) => {
     });
   });
 
-  await t.test('New note opens a tab on a new id', async () => {
-    const { els, calls } = await runRecovery();
-    els['new-note'].dispatch('click');
-    await settle();
-    assert.deepEqual(calls, [['tabs.create', { url: url(ID4) }]]);
-  });
+  for (const [kind, param] of [['permanent', 0], ['temporary', 1]]) {
+    await t.test(`New ${kind} note opens a tab on a new id with its kind in the URL`, async () => {
+      const { els, calls } = await runRecovery();
+      els[`new-${kind}`].dispatch('click');
+      await settle();
+      assert.deepEqual(calls, [['tabs.create', { url: `${url(ID4)}&temporary=${param}` }]]);
+    });
 
-  await t.test('a failed New note is logged', async () => {
-    const { els, warnings } = await runRecovery({ reject: { 'tabs.create': true } });
-    els['new-note'].dispatch('click');
-    await settle();
-    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: new note:']);
-  });
+    await t.test(`a failed New ${kind} note is logged`, async () => {
+      const { els, warnings } = await runRecovery({ reject: { 'tabs.create': true } });
+      els[`new-${kind}`].dispatch('click');
+      await settle();
+      assert.deepEqual(warnings.map((w) => w[0]), [`tabnotes: new ${kind} note:`]);
+    });
+  }
 
   await t.test('search hits', async (t2) => {
     const marks = (node) => [...(node.tagName === 'MARK' ? [node] : []), ...node.children.flatMap(marks)];
