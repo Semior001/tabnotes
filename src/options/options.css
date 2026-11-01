@@ -24,6 +24,10 @@ body {
   width: 8em;
 }
 
+#title-hint {
+  color: var(--color-muted);
+}
+
 .error {
   margin: 0 0 var(--space-4);
 }

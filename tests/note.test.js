@@ -2346,7 +2346,7 @@ test('note page', async (t) => {
         page.clock.run();
         assert.deepEqual(page.writes().at(-1), [
           'storage.local.set',
-          { [KEY]: { title: 'New', content: 'hi', updatedAt: 1000, deletedAt: null } },
+          { [KEY]: { title: 'New', content: 'hi', updatedAt: 1001, deletedAt: null } },
         ]);
       });
 
@@ -2459,6 +2459,46 @@ test('note page', async (t) => {
         assert.equal(page.els.title.textContent, 'New');
         assert.equal(page.doc.title, 'New');
         page.type('abc');
+        page.clock.run();
+        assert.equal(page.writes().at(-1)[1][KEY].title, 'New');
+      });
+    });
+
+    // updatedAt is equal in both, so only a stamp above it tells the echo of the
+    // earlier write from a change a tab should adopt
+    await t.test('an echo of the write before the commit does not take the title back', async (t) => {
+      await t.test('with the commit in the same millisecond', async () => {
+        const page = await runNote(opts());
+        page.type('ab');
+        page.clock.run();
+        const first = page.writes()[0][1][KEY];
+        press(open(page, 'New'), 'Enter');
+        const second = page.writes()[1][1][KEY];
+        page.change({ [KEY]: { newValue: first } });
+        assert.equal(page.els.title.textContent, 'New');
+        assert.equal(page.doc.title, 'New');
+        assert.ok(second.updatedAt > first.updatedAt);
+        page.change({ [KEY]: { newValue: second } });
+        page.type('abc');
+        page.clock.run();
+        const last = page.writes().at(-1)[1][KEY];
+        assert.equal(last.title, 'New');
+        assert.ok(last.updatedAt >= second.updatedAt);
+      });
+
+      await t.test('on a note left blank, where the save stamps nothing', async () => {
+        const page = await runNote(opts());
+        page.type('ab');
+        page.clock.run();
+        const first = page.writes()[0][1][KEY];
+        page.type('');
+        press(open(page, 'New'), 'Enter');
+        assert.deepEqual(page.writes().at(-1), ['storage.local.remove', KEY]);
+        page.change({ [KEY]: { newValue: first } });
+        assert.equal(page.els.title.textContent, 'New');
+        assert.equal(page.doc.title, 'New');
+        assert.equal(page.cm().getValue(), '');
+        page.type('c');
         page.clock.run();
         assert.equal(page.writes().at(-1)[1][KEY].title, 'New');
       });

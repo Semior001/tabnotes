@@ -197,6 +197,11 @@ test('the rename hint sits over the panes', () => {
   assert.match(css, /\.title-hint \{\s*position: absolute;/);
 });
 
+test('the title hint is muted on both pages', () => {
+  assert.match(read('src', 'note', 'note.css'), /\.title-hint \{[^}]*color: var\(--color-muted\);/);
+  assert.match(read('src', 'options', 'options.css'), /#title-hint \{[^}]*color: var\(--color-muted\);/);
+});
+
 // no fake layout shows these: a row must stay one line, and its actions must
 // not shift it, yet stay reachable by keyboard and on touch
 test('the All notes row rules that only a real layout would show', () => {

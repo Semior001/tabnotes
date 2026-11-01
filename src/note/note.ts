@@ -265,7 +265,8 @@ declare const mermaid: typeof import('mermaid').default;
   };
   const saver = createDebouncer(() => {
     if (stopped) return;
-    const next = edit(note, cm!.getValue(), Date.now());
+    // never below a stamp commitRename set in this millisecond
+    const next = edit(note, cm!.getValue(), Math.max(Date.now(), note.updatedAt));
     if (next === null) {
       lastWrite = browser.storage.local.remove(key).then(hideSaveError).catch(saveFailed('remove note'));
       return;
@@ -587,6 +588,9 @@ declare const mermaid: typeof import('mermaid').default;
   // a stored title holding braces, and writing it would revert a rename adopted
   // while the input was open. The save is flushed as a pending one could be
   // dropped as older than a restore, or lose the title to another tab's save.
+  // The stamp is above the last write, here as edit does not stamp a blank note
+  // and a clock can repeat: onChange adopts an equal updatedAt, as restore and
+  // trash keep it, so the echo of that write would take the title back.
   const commitRename = () => {
     if (renaming === null) return;
     const opened = renaming;
@@ -594,7 +598,7 @@ declare const mermaid: typeof import('mermaid').default;
     if (titleInput.value === opened) return;
     const title = expandTitle(titleInput.value, titleVars(new Date(), source));
     if (title === '') return;
-    note = { ...note, title };
+    note = { ...note, title, updatedAt: Math.max(Date.now(), note.updatedAt + 1) };
     showTitle();
     saver.schedule();
     saver.flush();
