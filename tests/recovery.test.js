@@ -1024,7 +1024,7 @@ test('recovery', async (t) => {
     await click('bin', 0, 'Restore');
     assert.deepEqual(calls, [
       ['storage.local.get', key(ID1)],
-      ['storage.local.set', { [key(ID1)]: note(2, { content: 'edited in bin' }) }],
+      ['storage.local.set', { [key(ID1)]: { ...note(2, { content: 'edited in bin' }), restoredAt: NOW } }],
     ]);
     assert.deepEqual(snippets('bin'), []);
     assert.deepEqual(snippets('other'), ['edited in bin']);
@@ -1430,8 +1430,8 @@ test('recovery', async (t) => {
       await press(els, 'bar-move');
       assert.equal(focus.active, els['status-undo']);
       await press(els, 'status-undo');
-      assert.deepEqual(state.storage[key(ID1)], note(3, { content: 'one' }));
-      assert.deepEqual(state.storage[key(ID2)], note(2, { content: 'two' }));
+      assert.deepEqual(state.storage[key(ID1)], { ...note(3, { content: 'one' }), restoredAt: NOW });
+      assert.deepEqual(state.storage[key(ID2)], { ...note(2, { content: 'two' }), restoredAt: NOW });
       assert.equal(els['status-text'].textContent, 'Restored 2 notes');
       assert.equal(els['status-undo'].hidden, true);
     });
@@ -1526,7 +1526,7 @@ test('recovery', async (t) => {
         ['bar-temporary', true, 'Changed 2 notes to temporary'],
         ['bar-permanent', false, 'Changed 2 notes to permanent'],
       ]) {
-        const { els, state, tick } = await runRecovery({
+        const { els, state, tick, entry } = await runRecovery({
           storage: {
             [key(ID1)]: note(3, { temporary: !temporary }),
             [key(ID2)]: note(2, { temporary: !temporary }),
@@ -1540,6 +1540,7 @@ test('recovery', async (t) => {
         assert.equal(els['status-text'].textContent, status);
         assert.equal(els.bar.hidden, true);
         assert.equal(els['status-undo'].hidden, true);
+        assert.equal(find(entry('other', 0), 'temporary') !== null, temporary, 'the row is drawn again');
       }
     });
 
@@ -1556,6 +1557,14 @@ test('recovery', async (t) => {
       assert.equal(key(ID2) in state.storage && 'temporary' in state.storage[key(ID2)], false);
       assert.ok(warnings.some((w) => w[0] === 'tabnotes: change note kind:'));
       assert.equal(els['status-undo'].hidden, true);
+    });
+
+    await t2.test('the bar refreshes after a kind change with no storage event', async () => {
+      const { els, tick, reads } = await runRecovery({ storage: { [key(ID1)]: note(1) }, reject: { 'storage.local.set': true } });
+      tick('other', 0);
+      const before = reads.length;
+      await press(els, 'bar-temporary');
+      assert.ok(reads.length > before);
     });
 
     await t2.test('a failed re-read counts as failed and writes nothing', async () => {
@@ -1624,6 +1633,23 @@ test('recovery', async (t) => {
       assert.ok(state.storage[key(ID2)].deletedAt);
       assert.equal(els['status-text'].textContent, 'Restored 2 notes');
       assert.equal(els['status-undo'].hidden, true);
+    });
+
+    await t2.test('a restored auto-expired note drops binDays and goes back to the full stay', async () => {
+      const expired = { ...note(5, { content: 'x', temporary: true, deletedAt: NOW - 1 }), binDays: 7 };
+      const { state, click, entry } = await runRecovery({ storage: { [key(ID1)]: expired } });
+      await click('bin', 0, 'Restore');
+      assert.deepEqual(state.storage[key(ID1)], { ...note(5, { content: 'x', temporary: true }), restoredAt: NOW });
+      assert.equal(find(entry('other', 0), 'temporary').textContent, 'Temporary');
+      await click('other', 0, 'Move to Bin');
+      assert.equal(find(entry('bin', 0), 'days').textContent, '30 days left');
+    });
+
+    await t2.test('Undo stamps the restore, so the close clock restarts with updatedAt kept', async () => {
+      const { els, state, click } = await runRecovery({ storage: { [key(ID1)]: note(5, { content: 'x', temporary: true }) } });
+      await click('other', 0, 'Move to Bin');
+      await press(els, 'status-undo');
+      assert.deepEqual(state.storage[key(ID1)], { ...note(5, { content: 'x', temporary: true }), restoredAt: NOW });
     });
 
     await t2.test('a blank note in a bulk restore is removed and not counted', async () => {

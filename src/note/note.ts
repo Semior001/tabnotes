@@ -276,7 +276,7 @@ declare const mermaid: typeof import('mermaid').default;
   };
   const saver = createDebouncer(() => {
     if (stopped) return;
-    // never below a stamp rename set in this millisecond
+    // never below a stamp rename or setTemporary set in this millisecond
     const next = edit(note, cm!.getValue(), Math.max(Date.now(), note.updatedAt));
     if (next === null) {
       lastWrite = browser.storage.local.remove(key).then(hideSaveError).catch(saveFailed('remove note'));
@@ -580,7 +580,7 @@ declare const mermaid: typeof import('mermaid').default;
   // a blank restored note is removed like any other blank note
   $('restore').addEventListener('click', () => {
     if (stopped) return;
-    note = restore(note);
+    note = restore(note, Date.now());
     showBin();
     saver.schedule();
     saver.flush();

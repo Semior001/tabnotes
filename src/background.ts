@@ -107,7 +107,8 @@ import {
       await Promise.all(sweep.expire.map(async (id) => {
         const note = current[id];
         if (note === undefined || note.deletedAt !== null || !note.temporary) return;
-        if (openNow.has(id) || note.updatedAt !== notes[id].updatedAt) return;
+        const before = notes[id];
+        if (openNow.has(id) || note.updatedAt !== before.updatedAt || note.restoredAt !== before.restoredAt) return;
         await browser.storage.local.set({ [storageKey(id)]: expire(note, now) }).catch((err: unknown) => {
           warn('bin closed note')(err);
           failed.push(id);

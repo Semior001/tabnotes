@@ -118,7 +118,7 @@ type Words = [string, string, string];
     const fresh = await reload(key);
     if (fresh === undefined) return 'failed';
     if (fresh === null || fresh.deletedAt === null) return 'gone';
-    const next = edit(restore(fresh), fresh.content, fresh.updatedAt);
+    const next = edit(restore(fresh, Date.now()), fresh.content, fresh.updatedAt);
     if (next !== null) return landed(browser.storage.local.set({ [key]: next }), 'restore note');
     const removed = await landed(browser.storage.local.remove(key), 'remove blank note');
     return removed === 'written' ? 'gone' : removed;
@@ -202,7 +202,7 @@ type Words = [string, string, string];
     items.length === 1 ? `Delete "${texts.get(items[0].id)?.name}" forever?` : `Delete ${items.length} notes forever?`;
 
   const kindButton = (item: Entry) => {
-    const temporary = item.note.deletedAt === null && item.note.temporary === true;
+    const temporary = item.note.temporary === true;
     return button('kind', temporary ? 'Make permanent' : 'Make temporary', () => toggleItems([item], !temporary));
   };
 
@@ -327,7 +327,7 @@ type Words = [string, string, string];
     const bar = el('div', 'actions');
     bar.append(...(binned ? acts : acts.slice(1)));
     li.append(box, mainArea(binned ? undefined : acts[0], name, preview));
-    if (note.deletedAt === null && note.temporary === true) {
+    if (!binned && note.temporary) {
       li.append(el('span', 'temporary', 'Temporary'));
       // the map can be one interval stale, so an open note shows no clock
       if (section !== 'open') li.append(el('span', 'days', closedDaysLeftText(closedNotes[item.id], note, now)));

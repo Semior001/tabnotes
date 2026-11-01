@@ -16,6 +16,7 @@ body {
 
 .header {
   margin-bottom: var(--space-4);
+  white-space: nowrap;
 }
 
 .status {
@@ -32,11 +33,12 @@ body {
 
 /* the search field takes the free space here */
 .header h1 {
-  flex: initial;
+  flex: none;
 }
 
 .search {
   flex: 1;
+  min-width: 0;
 }
 
 .section h2 {
@@ -203,8 +205,10 @@ mark {
   .preview {
     display: none;
   }
+}
 
-  /* the title and the header controls leave the search field no room */
+/* the title and the header controls leave the search field no room */
+@media (max-width: 720px) {
   .header {
     flex-wrap: wrap;
   }
@@ -222,10 +226,6 @@ mark {
 .date {
   flex-shrink: 0;
   font-size: 0.85em;
-}
-
-.days {
-  font-size: 0.9em;
 }
 
 .actions {

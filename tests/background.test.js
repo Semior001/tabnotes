@@ -576,6 +576,18 @@ test('close sweep', async (t) => {
     assert.deepEqual(calls[3], ['storage.local.get', [`note:${ID}`]]);
   });
 
+  await t.test('a restore between two sweeps restarts the clock over the old entry', async () => {
+    const storage = due({ [`note:${ID}`]: temp({ restoredAt: NOW - 1 }) });
+    const { closeSweepAt } = await runBackground({ storage });
+    await closeSweepAt(NOW);
+    assert.equal(storage[`note:${ID}`].deletedAt, null);
+    assert.deepEqual(storage.closedNotes, { [ID]: STALE });
+    await closeSweepAt(NOW + 30 * DAY_MS - 2);
+    assert.equal(storage[`note:${ID}`].deletedAt, null);
+    await closeSweepAt(NOW + 30 * DAY_MS - 1);
+    assert.equal(storage[`note:${ID}`].binDays, 7);
+  });
+
   await t.test('an auto-expired note is purged after its 7 days', async () => {
     const storage = due();
     const { closeSweepAt, sweepAt } = await runBackground({ storage });
@@ -634,6 +646,7 @@ test('close sweep', async (t) => {
       { name: 'a note binned by hand', land: (storage) => { storage[`note:${ID}`] = { ...temp(), deletedAt: NOW - 1 }; } },
       { name: 'a removed note', land: (storage) => { delete storage[`note:${ID}`]; } },
       { name: 'an edited note', land: (storage) => { storage[`note:${ID}`] = temp({ updatedAt: NOW }); } },
+      { name: 'a note binned and restored from All notes', land: (storage) => { storage[`note:${ID}`] = temp({ restoredAt: NOW }); } },
     ];
     for (const c of cases) {
       await t.test(`does not bin ${c.name}`, async () => {
@@ -645,7 +658,7 @@ test('close sweep', async (t) => {
       });
     }
 
-    await t.test('does not bin a note binned on the first read and restored', async () => {
+    await t.test('a note binned on the first read is not due, so a restore after it needs no re-check', async () => {
       const storage = due();
       storage[`note:${ID}`] = { ...temp(), deletedAt: NOW - DAY_MS };
       const { of } = await sweepWith(storage, [], () => {
@@ -713,6 +726,33 @@ test('close sweep', async (t) => {
       await closeSweepAt(NOW + 1);
       assert.equal(storage[`note:${ID}`].binDays, 7);
       assert.deepEqual(storage.closedNotes, {});
+    });
+
+    await t.test('a failed map write after binning leaves the entry, and the next sweep clears it', async () => {
+      const reject = {};
+      const storage = due();
+      const { closeSweepAt, warnings } = await runBackground({ storage, reject });
+      reject['storage.local.set'] = (items) => Object.hasOwn(items, 'closedNotes');
+      await closeSweepAt(NOW);
+      assert.equal(storage[`note:${ID}`].binDays, 7);
+      assert.deepEqual(storage.closedNotes, { [ID]: STALE });
+      assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: save closed notes:']);
+
+      reject['storage.local.set'] = false;
+      await closeSweepAt(NOW + 1);
+      assert.deepEqual(storage.closedNotes, {});
+    });
+
+    await t.test('a note restored while the failed map write left its entry is not binned again', async () => {
+      const reject = {};
+      const storage = due();
+      const { closeSweepAt } = await runBackground({ storage, reject });
+      reject['storage.local.set'] = (items) => Object.hasOwn(items, 'closedNotes');
+      await closeSweepAt(NOW);
+      reject['storage.local.set'] = false;
+      storage[`note:${ID}`] = temp({ restoredAt: NOW + 1 });
+      await closeSweepAt(NOW + 2);
+      assert.equal(storage[`note:${ID}`].deletedAt, null);
     });
 
     await t.test('a failed map write is logged', async () => {

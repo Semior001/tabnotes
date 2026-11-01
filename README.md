@@ -15,8 +15,8 @@ Markdown notes that live in your Firefox tabs. Click the toolbar button and a no
 - **Rich previews.** Task lists you can tick, tables, highlighted code with a Copy button, and [Mermaid](https://mermaid.js.org/) diagrams.
 - **Images.** Drop or paste images into a note, up to 25 MB each.
 - **All notes.** Search, reopen and tidy up every note in one place, including tabs you closed.
-- **A bin.** Deleted notes stay for 30 days before they are removed.
-- **Permanent and temporary notes.** A temporary note you have closed cleans itself up after 30 days. A permanent note stays until you delete it.
+- **A bin.** Deleted notes stay for 30 days before they are removed, 7 if a temporary note moved there by itself.
+- **Permanent and temporary notes.** A temporary note you have closed moves to the Bin after 30 days. A permanent note stays until you delete it.
 - **Light and dark.** Follow your system or pick one.
 - **Private.** Notes stay in this Firefox on this device. The extension makes no network requests.
 
@@ -105,7 +105,7 @@ Choose the default title for new notes, the kind of note the toolbar button crea
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
-  <img alt="The Settings page with default title, font size and theme" src="docs/screenshots/settings-light.png">
+  <img alt="The Settings page with default title, kind of toolbar notes, font size and theme" src="docs/screenshots/settings-light.png">
 </picture>
 
 ## Keyboard shortcuts
@@ -132,7 +132,7 @@ Use `Cmd` instead of `Ctrl` on Mac.
 - Remote images, such as `![](https://...)`, do not load. Add the image to the note instead.
 - HTML in a note is shown as plain text.
 - A deleted image still takes up space for at least 7 days, so you can undo the change.
-- Temporary notes are checked only while Firefox is running, so one can stay past its 30 days until the next time you start it.
+- Temporary notes are checked only while Firefox is running, so one can stay past its 30 days until Firefox has been running for 10 minutes.
 - Keep a note open if it shows a save error, for example when storage is full. Closing the tab loses the unsaved text.
 
 ## Development

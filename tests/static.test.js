@@ -212,6 +212,8 @@ test('the All notes row rules that only a real layout would show', () => {
   assert.match(css, /@media \(hover: none\) \{\s*\.actions \{[^}]*opacity: 1;/);
   assert.match(css, /\.top \{\s*position: sticky;/);
   assert.match(css, /\.date,\s*\.days,\s*\.temporary \{\s*flex-shrink: 0;/);
+  assert.match(css, /\.header \{[^}]*white-space: nowrap;/);
+  assert.match(css, /@media \(max-width: 720px\) \{\s*\.header \{\s*flex-wrap: wrap;/);
 });
 
 // the note page loads mermaid itself on the first diagram, so the HTML check

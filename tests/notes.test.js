@@ -228,7 +228,7 @@ test('newNote, edit, trash, restore', async (t) => {
     const n = { title: 'T', content: 'x', updatedAt: 1, deletedAt: null };
     const binned = trash(n, 9);
     assert.deepEqual(binned, { ...n, deletedAt: 9 });
-    assert.deepEqual(restore(binned), n);
+    assert.deepEqual(restore(binned, 20), { ...n, restoredAt: 20 });
   });
 
   await t.test('inputs not mutated', () => {
@@ -238,10 +238,10 @@ test('newNote, edit, trash, restore', async (t) => {
     edit(n, '', 3);
     rename(n, 'U', 2);
     trash(n, 4);
-    restore(trash(n, 4));
+    restore(trash(n, 4), 5);
     assert.deepEqual(n, snapshot);
     const b = { ...n, deletedAt: 4 };
-    restore(b);
+    restore(b, 5);
     assert.equal(b.deletedAt, 4);
   });
 });
@@ -1522,13 +1522,13 @@ test('expire', async (t) => {
   });
 
   await t.test('restore drops binDays and keeps the kind', () => {
-    const restored = restore(expire(note, now));
-    assert.deepEqual(restored, note);
+    const restored = restore(expire(note, now), now + 1);
+    assert.deepEqual(restored, { ...note, restoredAt: now + 1 });
     assert.equal(Object.hasOwn(restored, 'binDays'), false);
   });
 
   await t.test('a restored note binned by hand gets the full stay', () => {
-    assert.equal(daysLeft(trash(restore(expire(note, now)), now), now), 30);
+    assert.equal(daysLeft(trash(restore(expire(note, now), now), now), now), 30);
   });
 });
 
@@ -1579,6 +1579,13 @@ test('sweepClosed', async (t) => {
     assert.deepEqual(sweepClosed({ [ID1]: temp(now - 30 * DAY) }, none, closed, now), { closed: {}, expire: [ID1] });
   });
 
+  await t.test('a restore restarts the clock over a stale entry, and the entry stays', () => {
+    const closed = { [ID1]: now - 40 * DAY };
+    const restored = (at) => ({ ...temp(), restoredAt: at });
+    assert.deepEqual(sweepClosed({ [ID1]: restored(now - 1) }, none, closed, now), { closed, expire: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: restored(now - 30 * DAY) }, none, closed, now), { closed: {}, expire: [ID1] });
+  });
+
   await t.test('each note is decided on its own', () => {
     const notes = { [ID1]: temp(), [ID2]: temp(), [ID3]: temp(), [ID4]: newNote('T', 0) };
     const closed = { [ID1]: now - 31 * DAY, [ID2]: now - 31 * DAY };
@@ -1606,6 +1613,7 @@ test('closedDaysLeft', async (t) => {
     ['past the end', now - 40 * DAY, note, 0],
     ['an edit after the sighting counts', now - 20 * DAY, { ...note, updatedAt: now - 5 * DAY }, 25],
     ['an edit does not add days past a full clock', undefined, { ...note, updatedAt: now - 5 * DAY }, 30],
+    ['a restore after the sighting counts', now - 40 * DAY, { ...note, restoredAt: now - 5 * DAY }, 25],
   ];
   for (const [name, firstSeen, n, want] of cases) {
     await t.test(name, () => assert.equal(closedDaysLeft(firstSeen, n, now), want));

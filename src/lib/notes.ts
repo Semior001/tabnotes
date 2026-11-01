@@ -6,12 +6,15 @@ import type { MarkedExtension, Token, Tokens } from 'marked';
 // LiveNote and BinnedNote split on deletedAt, so the bin countdown can only be
 // asked of a note known to be binned. temporary is absent on a permanent note,
 // never false, so notes stored before the flag existed stay permanent.
-export interface LiveNote {
+// restoredAt restarts the close clock: an All notes restore keeps updatedAt,
+// and no sweep may have seen the note binned to clear its closedNotes entry.
+interface LiveNote {
   title: string;
   content: string;
   updatedAt: number;
   deletedAt: null;
   temporary?: true;
+  restoredAt?: number;
 }
 
 // binDays is set only on an auto-expired note; absent means BIN_DAYS
@@ -283,9 +286,9 @@ export function expire(note: LiveNote, now: number): BinnedNote {
   return { ...trash(note, now), binDays: EXPIRED_BIN_DAYS };
 }
 
-export function restore(note: Note): LiveNote {
+export function restore(note: Note, now: number): LiveNote {
   const { binDays: _, ...rest } = note as BinnedNote;
-  return { ...rest, deletedAt: null };
+  return { ...rest, deletedAt: null, restoredAt: now };
 }
 
 const daysUntil = (start: number, days: number, now: number) =>
@@ -298,7 +301,7 @@ export function daysLeft(note: BinnedNote, now: number): number {
 // closedDaysLeft is the countdown of a closed temporary note. With no sighting
 // yet its clock has not started.
 export function closedDaysLeft(firstSeen: number | undefined, note: Note, now: number): number {
-  return daysUntil(Math.max(firstSeen ?? now, note.updatedAt), TEMPORARY_DAYS, now);
+  return daysUntil(Math.max(firstSeen ?? now, note.updatedAt, note.restoredAt ?? 0), TEMPORARY_DAYS, now);
 }
 
 const leftText = (n: number) => `${n} day${n === 1 ? '' : 's'} left`;
@@ -819,9 +822,10 @@ export function sameFirstSeen(a: Record<string, number>, b: Record<string, numbe
 
 // sweepClosed runs the close clock over stored notes and the ids open in tabs.
 // Only a live temporary note with no tab stays in the map, so one reopened,
-// made permanent, binned or removed leaves it. updatedAt counts because an edit
-// after a reopen between two sweeps shows the note was in use. A note is due
-// only with an entry already old enough, so a first sighting never bins it.
+// made permanent, binned or removed leaves it. closedDaysLeft counts updatedAt
+// because an edit after a reopen between two sweeps shows the note was in use.
+// A note is due only with an entry already old enough, so a first sighting
+// never bins it.
 export function sweepClosed(
   notes: Record<string, Note>,
   openIds: Set<string>,
@@ -831,12 +835,11 @@ export function sweepClosed(
   const sweep: ClosedSweep = { closed: {}, expire: [] };
   for (const [id, note] of Object.entries(notes)) {
     if (note.deletedAt !== null || !note.temporary || openIds.has(id)) continue;
-    const firstSeen = closed[id] ?? now;
-    if (now - Math.max(firstSeen, note.updatedAt) >= TEMPORARY_DAYS * DAY_MS) {
+    if (closedDaysLeft(closed[id], note, now) === 0) {
       sweep.expire.push(id);
       continue;
     }
-    sweep.closed[id] = firstSeen;
+    sweep.closed[id] = closed[id] ?? now;
   }
   return sweep;
 }

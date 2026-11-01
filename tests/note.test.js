@@ -1519,7 +1519,7 @@ test('note page', async (t) => {
     els.restore.dispatch('click');
     assert.equal(els.bin.hidden, true);
     assert.deepEqual(writes(), [
-      ['storage.local.set', { [KEY]: { title: 'Jira', content: 'ab', updatedAt: 1000, deletedAt: null } }],
+      ['storage.local.set', { [KEY]: { title: 'Jira', content: 'ab', updatedAt: 1000, deletedAt: null, restoredAt: 1000 } }],
     ]);
     clock.run();
     assert.equal(writes().length, 1);
@@ -2232,7 +2232,7 @@ test('note page', async (t) => {
       assert.equal(els.kind.hidden, false);
       assert.equal(els.kind.textContent, 'Temporary');
       assert.deepEqual(writes(), [
-        ['storage.local.set', { [KEY]: stored('a', { ...temporary, updatedAt: 1000 }) }],
+        ['storage.local.set', { [KEY]: stored('a', { ...temporary, updatedAt: 1000, restoredAt: 1000 }) }],
       ]);
     });
 
@@ -2339,7 +2339,7 @@ test('note page', async (t) => {
       clock.run();
       assert.deepEqual(writes().at(-1), [
         'storage.local.set',
-        { [KEY]: { title: 'Jira', content: 'abcd', updatedAt: 2000, deletedAt: null } },
+        { [KEY]: { title: 'Jira', content: 'abcd', updatedAt: 2000, deletedAt: null, restoredAt: 2000 } },
       ]);
     });
   });
