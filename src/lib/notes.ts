@@ -801,9 +801,9 @@ export function orphansAfterFailedRemove(sweep: ImageSweep, orphans: ImageOrphan
   return kept;
 }
 
-// sameOrphans compares by entry: key order follows getKeys in a swept map and
-// insertion in the stored one.
-export function sameOrphans(a: ImageOrphans, b: ImageOrphans): boolean {
+// sameFirstSeen compares two id -> first sighting maps by entry: key order
+// follows getKeys in a swept map and insertion in the stored one.
+export function sameFirstSeen(a: Record<string, number>, b: Record<string, number>): boolean {
   const entries = Object.entries(a);
   return entries.length === Object.keys(b).length && entries.every(([id, at]) => b[id] === at);
 }

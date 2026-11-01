@@ -9,6 +9,7 @@ const { bundle } = require('./bundle.js');
 const script = bundle('src/background.ts');
 
 const DAY_MS = 86400000;
+const CLOSE_SWEEP_MS = 600000;
 const NOW = Date.UTC(2026, 9, 29);
 const ID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const ID2 = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
@@ -20,8 +21,10 @@ const settle = () => new Promise((r) => setImmediate(r));
 // runBackground evaluates the background bundle in a vm context with a
 // browser stub, a fixed clock and recorded (never real) timers so node --test
 // can exit. onRead runs after each get has taken its snapshot, so a test can
-// land a write the script has not seen.
-async function runBackground({ storage = {}, reject = {}, onRead = () => {} } = {}) {
+// land a write the script has not seen, and after each tabs.query too. tabs is
+// what tabs.query returns, read at call time, and a function in reject decides
+// by the call's arguments.
+async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tabs = [] } = {}) {
   const warnings = [];
   const calls = [];
   const intervals = [];
@@ -31,7 +34,8 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {} } = 
   // args are cloned into this realm so deepStrictEqual compares prototypes
   const call = async (name, ...args) => {
     calls.push(structuredClone([name, ...args]));
-    if (reject[name]) throw new Error(`${name} rejected`);
+    const fails = typeof reject[name] === 'function' ? reject[name](...args) : reject[name];
+    if (fails) throw new Error(`${name} rejected`);
   };
   const ctx = vm.createContext({
     console: { warn: (...a) => warnings.push(a) },
@@ -43,7 +47,15 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {} } = 
     browser: {
       runtime: { getURL: (p) => `moz-extension://uuid/${p}` },
       browserAction: { onClicked: { addListener: (fn) => clicks.push(fn) } },
-      tabs: { create: (props) => call('tabs.create', props) },
+      tabs: {
+        create: (props) => call('tabs.create', props),
+        query: async (props) => {
+          await call('tabs.query', props);
+          const got = structuredClone(tabs);
+          onRead();
+          return got;
+        },
+      },
       storage: {
         local: {
           getKeys: async () => {
@@ -75,13 +87,16 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {} } = 
     await settle();
   };
   const of = (name) => calls.filter(([n]) => n === name);
-  // sweepAt runs the 24h purge again with the clock at the given time
-  const sweepAt = async (time) => {
+  // fire runs the interval of the given delay with the clock at the given time
+  const fire = async (delay, time) => {
     now = time;
-    intervals[0].fn();
+    intervals.find((i) => i.delay === delay).fn();
     await settle();
   };
-  return { warnings, calls, intervals, click, of, sweepAt };
+  // sweepAt runs the 24h purge, closeSweepAt the 10-minute close sweep
+  const sweepAt = (time) => fire(DAY_MS, time);
+  const closeSweepAt = (time) => fire(CLOSE_SWEEP_MS, time);
+  return { warnings, calls, intervals, click, of, sweepAt, closeSweepAt };
 }
 
 const note = (deletedAt) => ({ title: 'Notes', content: 'x', updatedAt: 1, deletedAt });
@@ -131,12 +146,10 @@ test('purge', async (t) => {
 
   await t.test('runs again every 24h', async () => {
     const storage = {};
-    const { intervals, of } = await runBackground({ storage });
-    assert.equal(intervals.length, 1);
-    assert.equal(intervals[0].delay, DAY_MS);
+    const { intervals, of, sweepAt } = await runBackground({ storage });
+    assert.deepEqual(intervals.map((i) => i.delay), [DAY_MS, CLOSE_SWEEP_MS]);
     storage[`note:${ID}`] = note(NOW - 31 * DAY_MS);
-    intervals[0].fn();
-    await settle();
+    await sweepAt(NOW);
     assert.equal(of('storage.local.getKeys').length, 2);
     assert.equal(of('storage.local.get').length, 2);
     assert.deepEqual(of('storage.local.remove'), [['storage.local.remove', [`note:${ID}`]]]);
@@ -491,5 +504,204 @@ test('image sweep', async (t) => {
     const requested = of('storage.local.get').flatMap(([, keys]) => keys);
     assert.ok(requested.includes('imageOrphans'));
     assert.deepEqual(requested.filter((k) => k.startsWith('image:')), []);
+  });
+});
+
+test('close sweep', async (t) => {
+  const STALE = NOW - 30 * DAY_MS;
+  const temp = (extra = {}) => ({ ...note(null), temporary: true, ...extra });
+  const tab = (id) => ({ id: 1, url: `moz-extension://uuid/note/note.html?id=${id}` });
+  const due = (extra = {}) => ({ [`note:${ID}`]: temp(), closedNotes: { [ID]: STALE }, ...extra });
+  const sets = (of) => of('storage.local.set').map(([, items]) => items);
+
+  await t.test('does not run at startup', async () => {
+    const storage = due();
+    const { of } = await runBackground({ storage });
+    assert.deepEqual(of('tabs.query'), []);
+    assert.equal(of('storage.local.get').flatMap(([, keys]) => keys).includes('closedNotes'), false);
+    assert.deepEqual(sets(of), []);
+    assert.equal(storage[`note:${ID}`].deletedAt, null);
+  });
+
+  await t.test('a closed temporary note enters the map, a permanent or open one does not', async () => {
+    const storage = {
+      [`note:${ID}`]: temp(),
+      [`note:${ID2}`]: note(null),
+      [`note:${ID3}`]: temp(),
+      [`image:${ID}`]: { dataUrl: 'data:image/png;base64,AAAA' },
+    };
+    const tabs = [tab(ID3), { id: 2, url: 'https://a/' }, { id: 3 }];
+    const { of, closeSweepAt, warnings } = await runBackground({ storage, tabs });
+    await closeSweepAt(NOW);
+    assert.deepEqual(storage.closedNotes, { [ID]: NOW });
+    assert.deepEqual(of('tabs.query'), [['tabs.query', {}]]);
+    assert.deepEqual(warnings, []);
+    const requested = of('storage.local.get').flatMap(([, keys]) => keys);
+    assert.deepEqual(requested.filter((k) => k.startsWith('image:')), []);
+  });
+
+  await t.test('an open tab clears the entry', async () => {
+    const storage = { [`note:${ID}`]: temp(), closedNotes: { [ID]: NOW - DAY_MS } };
+    const { closeSweepAt } = await runBackground({ storage, tabs: [tab(ID)] });
+    await closeSweepAt(NOW);
+    assert.deepEqual(storage.closedNotes, {});
+  });
+
+  await t.test('a note closed for 30 days is binned for 7 and leaves the map', async () => {
+    const storage = due();
+    const { closeSweepAt, warnings } = await runBackground({ storage });
+    await closeSweepAt(NOW);
+    assert.deepEqual(storage[`note:${ID}`], { ...temp(), deletedAt: NOW, binDays: 7 });
+    assert.deepEqual(storage.closedNotes, {});
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('reads only the due notes and the tabs again before the write', async () => {
+    const { calls, closeSweepAt } = await runBackground({ storage: due({ [`note:${ID2}`]: temp() }) });
+    calls.length = 0;
+    await closeSweepAt(NOW);
+    assert.deepEqual(calls.map(([name]) => name), [
+      'storage.local.getKeys', 'storage.local.get', 'tabs.query',
+      'storage.local.get', 'tabs.query',
+      'storage.local.set', 'storage.local.set',
+    ]);
+    assert.deepEqual(calls[3], ['storage.local.get', [`note:${ID}`]]);
+  });
+
+  await t.test('an auto-expired note is purged after its 7 days', async () => {
+    const storage = due();
+    const { closeSweepAt, sweepAt } = await runBackground({ storage });
+    await closeSweepAt(NOW);
+    await sweepAt(NOW + 7 * DAY_MS - 1);
+    assert.ok(Object.hasOwn(storage, `note:${ID}`));
+    await sweepAt(NOW + 7 * DAY_MS);
+    assert.equal(Object.hasOwn(storage, `note:${ID}`), false);
+  });
+
+  await t.test('an unchanged map is not written', async () => {
+    const closedNotes = { [ID]: NOW - DAY_MS };
+    const { of, closeSweepAt } = await runBackground({ storage: { [`note:${ID}`]: temp(), closedNotes } });
+    await closeSweepAt(NOW);
+    assert.deepEqual(sets(of), []);
+  });
+
+  await t.test('no temporary notes and no map writes nothing', async () => {
+    const { of, closeSweepAt } = await runBackground({ storage: { [`note:${ID}`]: note(null) } });
+    await closeSweepAt(NOW);
+    assert.deepEqual(sets(of), []);
+  });
+
+  await t.test('the read before binning', async (t) => {
+    // land runs once after the sweep's first get and tabs.query, so the sweep
+    // decides from snapshots without the change and only its re-check can see it
+    const sweepWith = async (storage, tabs, land) => {
+      let armed = false;
+      let reads = 0;
+      const run = await runBackground({
+        storage,
+        tabs,
+        onRead: () => {
+          if (armed && ++reads === 2) land();
+        },
+      });
+      armed = true;
+      await run.closeSweepAt(NOW);
+      return run;
+    };
+
+    const cases = [
+      { name: 'a note opened meanwhile', land: (storage, tabs) => tabs.push(tab(ID)) },
+      { name: 'a note made permanent', land: (storage) => { storage[`note:${ID}`] = note(null); } },
+      { name: 'a note binned by hand', land: (storage) => { storage[`note:${ID}`] = { ...temp(), deletedAt: NOW - 1 }; } },
+      { name: 'a removed note', land: (storage) => { delete storage[`note:${ID}`]; } },
+      { name: 'an edited note', land: (storage) => { storage[`note:${ID}`] = temp({ updatedAt: NOW }); } },
+    ];
+    for (const c of cases) {
+      await t.test(`does not bin ${c.name}`, async () => {
+        const storage = due();
+        const tabs = [];
+        const { of, warnings } = await sweepWith(storage, tabs, () => c.land(storage, tabs));
+        assert.deepEqual(sets(of), [{ closedNotes: {} }]);
+        assert.deepEqual(warnings, []);
+      });
+    }
+
+    await t.test('does not bin a note binned on the first read and restored', async () => {
+      const storage = due();
+      storage[`note:${ID}`] = { ...temp(), deletedAt: NOW - DAY_MS };
+      const { of } = await sweepWith(storage, [], () => {
+        storage[`note:${ID}`] = temp();
+      });
+      assert.deepEqual(sets(of), [{ closedNotes: {} }]);
+      assert.deepEqual(storage[`note:${ID}`], temp());
+    });
+
+    await t.test('bins the other due notes', async () => {
+      const storage = due({ [`note:${ID2}`]: temp(), closedNotes: { [ID]: STALE, [ID2]: STALE } });
+      const tabs = [];
+      await sweepWith(storage, tabs, () => tabs.push(tab(ID)));
+      assert.equal(storage[`note:${ID}`].deletedAt, null);
+      assert.equal(storage[`note:${ID2}`].binDays, 7);
+      assert.deepEqual(storage.closedNotes, {});
+    });
+  });
+
+  await t.test('failures', async (t) => {
+    const reads = [
+      { key: 'storage.local.getKeys', msg: 'list keys for close sweep' },
+      { key: 'storage.local.get', msg: 'load notes for close sweep' },
+      { key: 'tabs.query', msg: 'list tabs for close sweep' },
+    ];
+    for (const c of reads) {
+      await t.test(`a rejected ${c.key} writes nothing`, async () => {
+        const reject = {};
+        const { of, closeSweepAt, warnings } = await runBackground({ storage: due({ [`note:${ID2}`]: temp() }), reject });
+        reject[c.key] = true;
+        await closeSweepAt(NOW);
+        assert.deepEqual(sets(of), []);
+        assert.deepEqual(warnings.map((w) => w[0]), [`tabnotes: ${c.msg}:`]);
+      });
+    }
+
+    const rereads = [
+      { key: 'storage.local.get', msg: 'load due notes' },
+      { key: 'tabs.query', msg: 'list tabs for due notes' },
+    ];
+    for (const c of rereads) {
+      await t.test(`a rejected second ${c.key} writes nothing`, async () => {
+        const reject = {};
+        const { of, closeSweepAt, warnings } = await runBackground({ storage: due({ [`note:${ID2}`]: temp() }), reject });
+        let seen = 0;
+        reject[c.key] = () => ++seen === 2;
+        await closeSweepAt(NOW);
+        assert.deepEqual(sets(of), []);
+        assert.deepEqual(warnings.map((w) => w[0]), [`tabnotes: ${c.msg}:`]);
+      });
+    }
+
+    await t.test('a failed note write keeps its id, and the next sweep retries it', async () => {
+      const reject = {};
+      const storage = due({ [`note:${ID2}`]: temp(), closedNotes: { [ID]: STALE, [ID2]: STALE } });
+      const { closeSweepAt, warnings } = await runBackground({ storage, reject });
+      reject['storage.local.set'] = (items) => Object.hasOwn(items, `note:${ID}`);
+      await closeSweepAt(NOW);
+      assert.equal(storage[`note:${ID}`].deletedAt, null);
+      assert.equal(storage[`note:${ID2}`].binDays, 7);
+      assert.deepEqual(storage.closedNotes, { [ID]: STALE });
+      assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: bin closed note:']);
+
+      reject['storage.local.set'] = false;
+      await closeSweepAt(NOW + 1);
+      assert.equal(storage[`note:${ID}`].binDays, 7);
+      assert.deepEqual(storage.closedNotes, {});
+    });
+
+    await t.test('a failed map write is logged', async () => {
+      const reject = {};
+      const { closeSweepAt, warnings } = await runBackground({ storage: { [`note:${ID}`]: temp() }, reject });
+      reject['storage.local.set'] = true;
+      await closeSweepAt(NOW);
+      assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: save closed notes:']);
+    });
   });
 });

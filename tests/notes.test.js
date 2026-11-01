@@ -9,7 +9,7 @@ const {
   newNote, edit, rename, trash, restore, daysLeft, daysLeftText, expired, classify, matches, escapeHTML, plainPreview, rowText, searchParts, selectRange, shortDate, DEFAULT_TITLE,
   codeBlockHTML, previewExtension, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, toggleWrap, linkText, fontSizeFrom, themeFrom, isDarkTheme,
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
-  imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameOrphans,
+  imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameFirstSeen,
   titleVars, expandTitle, TITLE_HINT,
   setTemporary, expire, temporaryFromUrl, sweepClosed, closedAfterFailedWrite, closedDaysLeft,
 } = require('../src/lib/notes.ts');
@@ -1079,7 +1079,7 @@ test('orphansAfterFailedRemove keeps first sightings and leaves the sweep alone'
   assert.deepEqual(sweep.orphans, { [IMG_B]: 5 });
 });
 
-test('sameOrphans', async (t) => {
+test('sameFirstSeen', async (t) => {
   const cases = [
     ['both empty', {}, {}, true],
     ['key order', { [IMG_A]: 1, [IMG_B]: 2 }, { [IMG_B]: 2, [IMG_A]: 1 }, true],
@@ -1089,7 +1089,7 @@ test('sameOrphans', async (t) => {
     ['one less', { [IMG_A]: 1, [IMG_B]: 2 }, { [IMG_A]: 1 }, false],
   ];
   for (const [name, a, b, want] of cases) {
-    await t.test(name, () => assert.equal(sameOrphans(a, b), want));
+    await t.test(name, () => assert.equal(sameFirstSeen(a, b), want));
   }
 });
 
