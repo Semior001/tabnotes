@@ -2,13 +2,14 @@
 // fontSize, the editor and preview font size of every note tab, and theme,
 // the colour mode of every page.
 
-import { DEFAULT_TITLE, fontSizeFrom, themeFrom, type Settings } from '../lib/notes.ts';
+import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } from '../lib/notes.ts';
 
 (async function () {
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
   const inputEl = $<HTMLInputElement>('default-title');
   const sizeEl = $<HTMLInputElement>('font-size');
   const themeEl = $<HTMLSelectElement>('theme');
+  $('title-hint').textContent = TITLE_HINT;
 
   const warn = (what: string) => (err: unknown) => console.warn(`tabnotes: ${what}:`, err);
   const warnOr = <T>(what: string, fallback: T) => (err: unknown): T => {

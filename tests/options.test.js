@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { bundle } = require('./bundle.js');
+const { TITLE_HINT } = require('../src/lib/notes.ts');
 
 const root = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
@@ -40,6 +41,7 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
   const els = {
     error: element({ hidden: true }),
     'default-title': element({ disabled: true }),
+    'title-hint': element({ textContent: '' }),
     'font-size': element({ disabled: true }),
     theme: element({ disabled: true, value: 'system' }),
     'all-notes': element(),
@@ -129,6 +131,9 @@ test('options.html starts with the harness state', () => {
   assert.deepEqual(options, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]);
   assert.match(html, /id="all-notes"[^>]*>All notes</);
   assert.match(html, /Default title for new notes/);
+  // the hint sits in the label, so .field + .field spacing still applies, and
+  // its text stays in code
+  assert.match(html, /<label class="field">\s*<span>[^<]*<\/span>\s*<input id="default-title"[^>]*>\s*<small id="title-hint"><\/small>\s*<\/label>/);
 });
 
 test('options page', async (t) => {
@@ -159,6 +164,18 @@ test('options page', async (t) => {
       ['storage.local.set', { settings: { defaultTitle: 'Jira' } }],
       ['storage.local.set', { settings: { defaultTitle: 'Jira ticket' } }],
     ]);
+  });
+
+  await t.test('shows the title hint', async () => {
+    const { els } = await runOptions();
+    assert.equal(els['title-hint'].textContent, TITLE_HINT);
+  });
+
+  await t.test('a template is stored unexpanded and trimmed', async () => {
+    const { writes, type, input } = await runOptions();
+    type('  {date} - {tab | trunc 30} ');
+    assert.deepEqual(writes(), [['storage.local.set', { settings: { defaultTitle: '{date} - {tab | trunc 30}' } }]]);
+    assert.equal(input.value, '  {date} - {tab | trunc 30} ');
   });
 
   await t.test('blank input saves "Notes"', async () => {
