@@ -89,11 +89,12 @@ const label = (b) => b.attributes['aria-label']?.split(': ')[0] ?? b.textContent
 // settle lets pending promise chains in the page run to completion
 const settle = () => new Promise((r) => setImmediate(r));
 
-const note = (updatedAt, { content = '', title = 'Sprint', deletedAt = null } = {}) => ({
+const note = (updatedAt, { content = '', title = 'Sprint', deletedAt = null, temporary = false } = {}) => ({
   title,
   content,
   updatedAt,
   deletedAt,
+  ...(temporary ? { temporary } : {}),
 });
 
 // FixedDate pins Date.now so days left and dates are stable
@@ -138,6 +139,8 @@ async function runRecovery({
     'new-permanent': make(),
     'new-temporary': make(),
     'bar-count': make(),
+    'bar-permanent': make(),
+    'bar-temporary': make(),
     'bar-move': make(),
     'bar-restore': make(),
     'bar-delete': make(),
@@ -149,7 +152,7 @@ async function runRecovery({
     'bin-details': make({ open: false }),
     'bin-summary': make(),
   };
-  els.bar.children = ['bar-count', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear'].map((id) => els[id]);
+  els.bar.children = ['bar-count', 'bar-permanent', 'bar-temporary', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear'].map((id) => els[id]);
   for (const s of ['open', 'recent', 'other', 'bin']) {
     els[s] = make();
     els[`${s}-section`] = make({ hidden: true });
@@ -314,7 +317,7 @@ test('recovery.html loads its scripts and starts with the harness state', () => 
   assert.deepEqual(srcs, ['../theme.js', 'recovery.js']);
   const hidden = ['error', 'empty', 'bar', 'status', 'status-undo'];
   const ids = [
-    'header', 'search', 'new-permanent', 'new-temporary', 'settings', ...hidden, 'bar-count', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear',
+    'header', 'search', 'new-permanent', 'new-temporary', 'settings', ...hidden, 'bar-count', 'bar-permanent', 'bar-temporary', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear',
     'status-text', 'bin-details', 'bin-summary', 'empty-bin',
   ];
   for (const s of ['open', 'recent', 'other', 'bin']) {
@@ -471,7 +474,7 @@ test('recovery', async (t) => {
     assert.equal(find(a, 'date').textContent, '2h');
     assert.equal(find(a, 'date').title, new Date(ts).toLocaleString());
     assert.equal(find(a, 'days'), null);
-    assert.deepEqual(labels('other', 0), ['Open', 'Move to Bin']);
+    assert.deepEqual(labels('other', 0), ['Open', 'Make temporary', 'Move to Bin']);
     assert.equal(find(entry('bin', 0), 'days').textContent, '29 days left');
     assert.equal(find(entry('bin', 1), 'days').textContent, '1 day left');
     assert.equal(find(entry('bin', 0), 'date'), null);
@@ -807,7 +810,7 @@ test('recovery', async (t) => {
         { id: 8, windowId: 80, url: url(ID1) },
       ],
     });
-    assert.deepEqual(labels('open', 0), ['Go to tab', 'Move to Bin']);
+    assert.deepEqual(labels('open', 0), ['Go to tab', 'Make temporary', 'Move to Bin']);
     await click('open', 0, 'Go to tab');
     assert.deepEqual(calls, [
       ['tabs.update', 7, { active: true }],
@@ -824,8 +827,8 @@ test('recovery', async (t) => {
         { window: { sessionId: 'w1', tabs: [{ url: url(ID2) }, { url: 'about:blank' }, { url: 'https://x/' }] } },
       ],
     });
-    assert.deepEqual(labels('recent', 0), ['Restore tab', 'Move to Bin']);
-    assert.deepEqual(labels('recent', 1), ['Restore window (3 tabs)', 'Move to Bin']);
+    assert.deepEqual(labels('recent', 0), ['Restore tab', 'Make temporary', 'Move to Bin']);
+    assert.deepEqual(labels('recent', 1), ['Restore window (3 tabs)', 'Make temporary', 'Move to Bin']);
     await click('recent', 0, 'Restore tab');
     await click('recent', 1, 'Restore window (3 tabs)');
     assert.deepEqual(calls, [
@@ -1402,9 +1405,132 @@ test('recovery', async (t) => {
     await t2.test('the bar offers what the scope allows', async () => {
       const { els, tick } = await runRecovery({ storage: { ...live(), [key(ID4)]: note(1, { deletedAt: NOW }) } });
       tick('other', 0);
-      assert.deepEqual([els['bar-move'].hidden, els['bar-restore'].hidden, els['bar-delete'].hidden], [false, true, true]);
+      const hiddenBar = () => ['bar-permanent', 'bar-temporary', 'bar-move', 'bar-restore', 'bar-delete'].map((id) => els[id].hidden);
+      assert.deepEqual(hiddenBar(), [false, false, false, true, true]);
       tick('bin', 0);
-      assert.deepEqual([els['bar-move'].hidden, els['bar-restore'].hidden, els['bar-delete'].hidden], [true, false, false]);
+      assert.deepEqual(hiddenBar(), [true, true, true, false, false]);
+    });
+
+    await t2.test('the kind row action makes a note temporary', async () => {
+      const { els, click, state, labels } = await runRecovery({ storage: { [key(ID1)]: note(1) } });
+      await click('other', 0, 'Make temporary');
+      assert.deepEqual(state.storage[key(ID1)], note(NOW, { temporary: true }));
+      assert.equal(els['status-text'].textContent, 'Changed 1 note to temporary');
+      assert.equal(els['status-undo'].hidden, true);
+      assert.deepEqual(labels('other', 0), ['Open', 'Make permanent', 'Move to Bin']);
+    });
+
+    await t2.test('the kind row action makes a note permanent, stamped above updatedAt', async () => {
+      const { els, click, state, labels } = await runRecovery({ storage: { [key(ID1)]: note(NOW + 5, { temporary: true }) } });
+      await click('other', 0, 'Make permanent');
+      assert.deepEqual(state.storage[key(ID1)], note(NOW + 6));
+      assert.equal(els['status-text'].textContent, 'Changed 1 note to permanent');
+      assert.deepEqual(labels('other', 0), ['Open', 'Make temporary', 'Move to Bin']);
+    });
+
+    await t2.test('the kind row action keeps focus and leaves an open tab alone', async () => {
+      const { click, button, focus, calls, state } = await runRecovery({
+        storage: { [key(ID1)]: note(1) },
+        tabs: [{ id: 4, windowId: 1, url: url(ID1) }],
+      });
+      button('open', 0, 'Make temporary').focus();
+      await click('open', 0, 'Make temporary');
+      assert.equal(state.storage[key(ID1)].temporary, true);
+      assert.equal(focus.active, button('open', 0, 'Make permanent'));
+      assert.deepEqual(calls.filter((c) => ['runtime.sendMessage', 'tabs.remove'].includes(c[0])), []);
+    });
+
+    await t2.test('the bar changes the selected notes both ways', async () => {
+      for (const [id, temporary, status] of [
+        ['bar-temporary', true, 'Changed 2 notes to temporary'],
+        ['bar-permanent', false, 'Changed 2 notes to permanent'],
+      ]) {
+        const { els, state, tick } = await runRecovery({
+          storage: {
+            [key(ID1)]: note(3, { temporary: !temporary }),
+            [key(ID2)]: note(2, { temporary: !temporary }),
+            [key(ID3)]: note(1, { temporary: !temporary }),
+          },
+        });
+        tick('other', 0);
+        tick('other', 1);
+        await press(els, id);
+        assert.deepEqual([ID1, ID2, ID3].map((i) => state.storage[key(i)].temporary === true), [temporary, temporary, !temporary]);
+        assert.equal(els['status-text'].textContent, status);
+        assert.equal(els.bar.hidden, true);
+        assert.equal(els['status-undo'].hidden, true);
+      }
+    });
+
+    await t2.test('a failed kind change is counted and warned', async () => {
+      const { els, state, tick, warnings } = await runRecovery({
+        storage: live(),
+        reject: { 'storage.local.set': (items) => key(ID2) in items },
+      });
+      tick('other', 0);
+      tick('other', 1);
+      await press(els, 'bar-temporary');
+      assert.equal(els['status-text'].textContent, 'Changed 1 of 2 notes to temporary. 1 could not be changed.');
+      assert.equal(state.storage[key(ID1)].temporary, true);
+      assert.equal(key(ID2) in state.storage && 'temporary' in state.storage[key(ID2)], false);
+      assert.ok(warnings.some((w) => w[0] === 'tabnotes: change note kind:'));
+      assert.equal(els['status-undo'].hidden, true);
+    });
+
+    await t2.test('a failed re-read counts as failed and writes nothing', async () => {
+      const { els, calls, tick, warnings } = await runRecovery({ storage: { [key(ID1)]: note(1) }, reject: { 'storage.local.get key': true } });
+      tick('other', 0);
+      await press(els, 'bar-temporary');
+      assert.equal(els['status-text'].textContent, 'Changed 0 of 1 note to temporary. 1 could not be changed.');
+      assert.ok(warnings.some((w) => w[0] === 'tabnotes: reload note:'));
+      assert.equal(calls.some((c) => c[0] === 'storage.local.set'), false);
+    });
+
+    await t2.test('a kind change ends an earlier Undo', async () => {
+      const { els, click, state } = await runRecovery({ storage: live() });
+      await click('other', 0, 'Move to Bin');
+      assert.equal(els['status-undo'].hidden, false);
+      await click('other', 0, 'Make temporary');
+      assert.equal(els['status-undo'].hidden, true);
+      await press(els, 'status-undo');
+      assert.equal(state.storage[key(ID1)].deletedAt, NOW);
+    });
+
+    await t2.test('a note already of that kind is not written and keeps its updatedAt', async () => {
+      const { els, state, tick, calls } = await runRecovery({
+        storage: {
+          [key(ID1)]: note(3, { temporary: true }),
+          [key(ID2)]: note(2),
+        },
+      });
+      tick('other', 0);
+      tick('other', 1);
+      await press(els, 'bar-temporary');
+      assert.deepEqual(state.storage[key(ID1)], note(3, { temporary: true }));
+      assert.deepEqual(calls.filter((c) => c[0] === 'storage.local.set').map((c) => Object.keys(c[1])), [[key(ID2)]]);
+      assert.equal(els['status-text'].textContent, 'Changed 1 note to temporary');
+    });
+
+    await t2.test('a selection needing no change shows no status', async () => {
+      const { els, calls, tick } = await runRecovery({ storage: { [key(ID1)]: note(1, { temporary: true }) } });
+      tick('other', 0);
+      await press(els, 'bar-temporary');
+      assert.equal(calls.some((c) => c[0] === 'storage.local.set'), false);
+      assert.equal(els.status.hidden, true);
+    });
+
+    await t2.test('a note binned or removed meanwhile counts as gone', async () => {
+      const { els, state, tick, calls } = await runRecovery({ storage: live() });
+      tick('other', 0);
+      tick('other', 1);
+      tick('other', 2);
+      state.storage[key(ID1)] = note(9, { deletedAt: NOW });
+      delete state.storage[key(ID2)];
+      await press(els, 'bar-temporary');
+      assert.deepEqual(state.storage[key(ID1)], note(9, { deletedAt: NOW }));
+      assert.equal(key(ID2) in state.storage, false);
+      assert.deepEqual(calls.filter((c) => c[0] === 'storage.local.set').map((c) => Object.keys(c[1])), [[key(ID3)]]);
+      assert.equal(els['status-text'].textContent, 'Changed 1 note to temporary');
     });
 
     await t2.test('Restore brings back the selected Bin notes', async () => {

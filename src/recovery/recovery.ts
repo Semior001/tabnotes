@@ -3,7 +3,7 @@
 
 import {
   classify, matches, idFromStorageKey, notesFromStorage, noteUrl, storageKey, edit, trash, restore, daysLeftText,
-  rowText, searchParts, selectRange, shortDate, DEFAULT_TITLE, type Entry, type Note, type RecentEntry, type Sections, type Settings, type StopMessage,
+  rowText, searchParts, selectRange, setTemporary, shortDate, DEFAULT_TITLE, type Entry, type Note, type RecentEntry, type Sections, type Settings, type StopMessage,
 } from '../lib/notes.ts';
 
 // what became of a note a bulk action touched: gone means there was nothing
@@ -132,6 +132,16 @@ type Words = [string, string, string];
     return landed(browser.storage.local.remove(key), 'delete note');
   };
 
+  // open tabs adopt the kind through storage.onChanged, so nothing is stopped; a
+  // note already of that kind is not stamped, which would restart its 30 days
+  const toggleItem = (temporary: boolean) => async ({ id }: { id: string }): Promise<Outcome> => {
+    const key = storageKey(id);
+    const fresh = await reload(key);
+    if (fresh === undefined) return 'failed';
+    if (fresh === null || fresh.deletedAt !== null || (fresh.temporary === true) === temporary) return 'gone';
+    return landed(browser.storage.local.set({ [key]: setTemporary(fresh, temporary, Date.now()) }), 'change note kind');
+  };
+
   const notesText = (n: number) => `${n} note${n === 1 ? '' : 's'}`;
 
   const report = (outcomes: Outcome[], [done, part, tail]: Words) => {
@@ -171,9 +181,13 @@ type Words = [string, string, string];
   const MOVED: Words = ['Moved', 'moved', ' to the Bin'];
   const RESTORED: Words = ['Restored', 'restored', ''];
   const DELETED: Words = ['Deleted', 'deleted', ' forever'];
+  const TO_PERMANENT: Words = ['Changed', 'changed', ' to permanent'];
+  const TO_TEMPORARY: Words = ['Changed', 'changed', ' to temporary'];
 
   const moveItems = (items: Entry[]) => bulk(items, trashItem, MOVED, (done) => done);
   const restoreItems = (items: Entry[]) => bulk(items, restoreItem, RESTORED, () => []);
+  const toggleItems = (items: Entry[], temporary: boolean) =>
+    bulk(items, toggleItem(temporary), temporary ? TO_TEMPORARY : TO_PERMANENT, () => []);
   const undoMove = () => bulk(undo.map((id) => ({ id })), restoreItem, RESTORED, (_, failed) => failed);
 
   const deleteItems = (items: Entry[], question: string) => {
@@ -183,6 +197,11 @@ type Words = [string, string, string];
 
   const deleteQuestion = (items: Entry[]) =>
     items.length === 1 ? `Delete "${texts.get(items[0].id)?.name}" forever?` : `Delete ${items.length} notes forever?`;
+
+  const kindButton = (item: Entry) => {
+    const temporary = item.note.deletedAt === null && item.note.temporary === true;
+    return button('kind', temporary ? 'Make permanent' : 'Make temporary', () => toggleItems([item], !temporary));
+  };
 
   // each row's item matches its section, which the types cannot follow through
   // the loop in render, so RecentEntry below is cast
@@ -197,6 +216,7 @@ type Words = [string, string, string];
               browser.windows.update(tab.windowId, { focused: true }).catch(warn('focus window')),
             ]),
           ),
+          kindButton(item),
           button('trash', 'Move to Bin', () => moveItems([item])),
         ];
       }
@@ -206,6 +226,7 @@ type Words = [string, string, string];
           button('restore-session', fromWindow ? `Restore window (${windowTabCount} tabs)` : 'Restore tab', () =>
             browser.sessions.restore(sessionId).catch(warn('restore session')),
           ),
+          kindButton(item),
           button('trash', 'Move to Bin', () => moveItems([item])),
         ];
       }
@@ -214,6 +235,7 @@ type Words = [string, string, string];
           button('open', 'Open', () =>
             browser.tabs.create({ url: noteUrl(noteBase, item.id) }).catch(warn('open note')),
           ),
+          kindButton(item),
           button('trash', 'Move to Bin', () => moveItems([item])),
         ];
       case 'bin':
@@ -314,6 +336,8 @@ type Words = [string, string, string];
     $('header').hidden = on;
     $('bar-count').textContent = `${selected.size} selected`;
     $('bar-move').hidden = scope !== 'live';
+    $('bar-permanent').hidden = scope !== 'live';
+    $('bar-temporary').hidden = scope !== 'live';
     $('bar-restore').hidden = scope !== 'bin';
     $('bar-delete').hidden = scope !== 'bin';
     // hiding the focused control would drop focus on the page
@@ -441,6 +465,7 @@ type Words = [string, string, string];
     if (inside) $('bin-summary').focus();
   });
   for (const kind of ['permanent', 'temporary'] as const) {
+    $(`bar-${kind}`).addEventListener('click', () => toggleItems(selectedItems(), kind === 'temporary').then(() => refresh()));
     $(`new-${kind}`).addEventListener('click', () => {
       browser.tabs.create({ url: noteUrl(noteBase, crypto.randomUUID(), kind === 'temporary') }).catch(warn(`new ${kind} note`));
     });
