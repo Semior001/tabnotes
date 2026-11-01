@@ -11,6 +11,7 @@ Markdown notes that live in your Firefox tabs. Click the toolbar button and a no
 
 - **Notes as tabs.** Each note is a normal tab, nested under the tab you opened it from if you use Sidebery.
 - **Editor and live preview.** Work side by side, or show only one of the two. Everything saves as you type.
+- **Titles from templates.** Rename a note from its header, or build titles from the date and the tab you came from.
 - **Rich previews.** Task lists you can tick, tables, highlighted code with a Copy button, and [Mermaid](https://mermaid.js.org/) diagrams.
 - **Images.** Drop or paste images into a note, up to 25 MB each.
 - **All notes.** Search, reopen and tidy up every note in one place, including tabs you closed.
@@ -50,6 +51,30 @@ The preview works too:
 
 To add an image, drop it into the editor or paste it from the clipboard.
 
+### Rename a note
+
+Click the title in the note header, or focus it and press `Enter`, then type a new one. `Enter` or clicking away saves it, and `Esc` cancels. The tab title changes with it. Close the tab before saving and the new title is lost, and a note with no text yet keeps its title only while the tab is open.
+
+A title can hold variables and functions, and the page lists them while you rename. They are filled in once, when you save, so the title stays plain text afterwards:
+
+| Variable | Value |
+| --- | --- |
+| `{date}` | Today, such as `2026-11-01` |
+| `{time}` | The time, such as `14:05` |
+| `{weekday}` | The day of the week, such as `Sunday` |
+| `{tab}` | The title of the tab the note was opened from |
+| `{host}` | The hostname of that tab, such as `github.com` |
+
+| Function | Effect |
+| --- | --- |
+| `trunc N` | Cut to at most N characters, including the `…` |
+| `lower` | Lower case |
+| `upper` | Upper case |
+
+Functions follow the variable after a `|`, and each works on the result of the one before. On a tab titled "Fix the login redirect on mobile Safari", `{date} - {tab | trunc 30}` gives `2026-11-01 - Fix the login redirect on mob…`.
+
+`{tab}` and `{host}` are empty if the note was not opened from a tab, as with "New note" in All notes, and `{host}` is empty for anything but a web page. Text in braces that is not a known variable and function stays as you typed it.
+
 ### Find your notes
 
 Open **All notes** from the header of any note. Notes are grouped into Open, Recently closed, Other notes and Bin. Click a row to go to the note, reopen its tab or restore it along with its window.
@@ -67,7 +92,7 @@ Press `/` to search. Tick rows, or Shift-click a range, to move several notes to
 
 ### Settings
 
-Choose the default title for new notes, the font size for all notes, and the theme.
+Choose the default title for new notes, the font size for all notes, and the theme. The default title can hold the same variables and functions as a rename, filled in when a note is created.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
