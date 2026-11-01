@@ -491,7 +491,7 @@ const holdRun = (mermaid) => {
 // browser API, and resolves once the page's async setup has finished.
 // storage is the initial storage.local content; the hidden state mirrors
 // note.html, which the 'note.html' test asserts. tab is what tabs.getCurrent
-// resolves to. With holdLoad the storage read stays pending until
+// resolves to, and sourceTab what tabs.get resolves to. With holdLoad the storage read stays pending until
 // releaseLoad(); with holdWrites every set/remove stays pending until
 // releaseWrites(). layout overrides the fake sizes of its editor and preview.
 // imageReads steers reads of image: keys only, so the note still loads: with hold they stay pending until releaseImages(), with fail
@@ -508,6 +508,7 @@ async function runNote({
   now = 1000,
   allTabs = [],
   tab = { id: 7, windowId: 1 },
+  sourceTab = {},
   holdLoad = false,
   holdWrites = false,
   imageReads = {},
@@ -673,6 +674,10 @@ async function runNote({
         getCurrent: async () => {
           await call('tabs.getCurrent');
           return tab === null ? undefined : tab;
+        },
+        get: async (id) => {
+          await call('tabs.get', id);
+          return structuredClone(sourceTab);
         },
       },
       storage: {
@@ -1009,6 +1014,56 @@ test('note page', async (t) => {
         assert.equal(doc.title, 'Notes');
       });
     }
+  });
+
+  await t.test('new note expands a template default title', async () => {
+    const { doc, els, calls } = await runNote({
+      now: new Date(2026, 10, 1, 14, 5).getTime(),
+      storage: { settings: { defaultTitle: '{date} {time} {weekday} - {tab | trunc 5} @ {host}' } },
+      tab: { id: 7, windowId: 1, openerTabId: 3 },
+      sourceTab: { title: 'Long title', url: 'https://github.com/x' },
+    });
+    const title = '2026-11-01 14:05 Sunday - Long… @ github.com';
+    assert.equal(doc.title, title);
+    assert.equal(els.title.textContent, title);
+    assert.deepEqual(calls.at(-1), ['tabs.get', 3]);
+  });
+
+  await t.test('existing note keeps its title unexpanded', async () => {
+    const { doc, els } = await runNote({
+      storage: { [KEY]: stored('hello', { title: '{date} {tab}' }), settings: { defaultTitle: '{date}' } },
+      tab: { id: 7, windowId: 1, openerTabId: 3 },
+      sourceTab: { title: 'Source', url: 'https://github.com/x' },
+    });
+    assert.equal(doc.title, '{date} {tab}');
+    assert.equal(els.title.textContent, '{date} {tab}');
+  });
+
+  await t.test('no opener leaves the source variables empty and reads no tab', async () => {
+    const { doc, calls } = await runNote({ storage: { settings: { defaultTitle: 'From {tab}{host}' } } });
+    assert.equal(doc.title, 'From');
+    assert.equal(calls.some(([name]) => name === 'tabs.get'), false);
+  });
+
+  await t.test('rejected tabs.get is logged and the note still loads', async () => {
+    const { els, doc, warnings, writes, clock, type } = await runNote({
+      storage: { settings: { defaultTitle: 'Note {tab}' } },
+      tab: { id: 7, windowId: 1, openerTabId: 3 },
+      reject: { 'tabs.get': true },
+    });
+    assert.equal(els.page.hidden, false);
+    assert.equal(doc.title, 'Note');
+    assert.equal(warnings.length, 1);
+    assert.equal(warnings[0][0], 'tabnotes: get source tab:');
+    type('x');
+    clock.run();
+    assert.equal(writes().length, 1);
+  });
+
+  await t.test('an expansion that comes out empty falls back to "Notes"', async () => {
+    const { doc, els } = await runNote({ storage: { settings: { defaultTitle: ' {tab} {host} ' } } });
+    assert.equal(doc.title, 'Notes');
+    assert.equal(els.title.textContent, 'Notes');
   });
 
   await t.test('new note is not stored until it gets content', async () => {

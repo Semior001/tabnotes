@@ -27,7 +27,7 @@ import {
   noteIdFromUrl, storageKey, newNote, edit, restore, daysLeftText, createDebouncer, canOpen, previewExtension,
   toggleWrap, linkText, fontSizeFrom, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, imageKey,
   imageIdFromHref, imageHTML, imageMarkdown, imageLabel, checkImageFiles, pasteIsText, themeFrom, isDarkTheme,
-  STORAGE_FULL_HINT, DEFAULT_TITLE, type ImageValue,
+  STORAGE_FULL_HINT, DEFAULT_TITLE, titleVars, expandTitle, type ImageValue,
   type Note, type NoteChange, type Pane, type Settings, type StopMessage, type ThemeMode,
 } from '../lib/notes.ts';
 
@@ -116,9 +116,12 @@ declare const mermaid: typeof import('mermaid').default;
     onChange(changes[key]);
   });
 
-  const [stored, current] = await Promise.all([
+  const [stored, { current, source }] = await Promise.all([
     browser.storage.local.get([key, 'settings', 'fontSize', 'theme']).catch(warnOr('load note', null)),
-    browser.tabs.getCurrent().catch(warnOr('get current tab', null)),
+    browser.tabs.getCurrent().catch(warnOr('get current tab', null)).then(async (tab) => {
+      if (tab?.openerTabId === undefined) return { current: tab, source: null };
+      return { current: tab, source: await browser.tabs.get(tab.openerTabId).catch(warnOr('get source tab', null)) };
+    }),
   ]);
   // without the stored note a save could overwrite it with an empty one
   if (stored === null) {
@@ -132,7 +135,8 @@ declare const mermaid: typeof import('mermaid').default;
   // a new note stays in memory until it gets content, so opening and closing
   // a note tab leaves nothing behind
   const initial: Note | undefined = early ? early.newValue : stored[key];
-  let note: Note = initial || newNote((stored.settings as Settings | undefined)?.defaultTitle || DEFAULT_TITLE, Date.now());
+  const defaultTitle = (stored.settings as Settings | undefined)?.defaultTitle || DEFAULT_TITLE;
+  let note: Note = initial || newNote(expandTitle(defaultTitle, titleVars(new Date(), source)) || DEFAULT_TITLE, Date.now());
   document.title = note.title;
   $('title').textContent = note.title;
   contentEl.value = note.content;
