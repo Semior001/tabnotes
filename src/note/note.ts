@@ -27,7 +27,7 @@ import {
   noteIdFromUrl, storageKey, newNote, edit, rename, restore, daysLeftText, createDebouncer, canOpen, previewExtension,
   toggleWrap, linkText, fontSizeFrom, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, imageKey,
   imageIdFromHref, imageHTML, imageMarkdown, imageLabel, checkImageFiles, pasteIsText, themeFrom, isDarkTheme,
-  STORAGE_FULL_HINT, DEFAULT_TITLE, TITLE_HINT, titleVars, expandTitle, type ImageValue,
+  STORAGE_FULL_HINT, DEFAULT_TITLE, TITLE_HINT, titleVars, expandTitle, temporaryFromUrl, type ImageValue,
   type Note, type NoteChange, type Pane, type Settings, type StopMessage, type ThemeMode,
 } from '../lib/notes.ts';
 
@@ -138,8 +138,13 @@ declare const mermaid: typeof import('mermaid').default;
   // a new note stays in memory until it gets content, so opening and closing
   // a note tab leaves nothing behind
   const initial: Note | undefined = early ? early.newValue : stored[key];
-  const defaultTitle = (stored.settings as Settings | undefined)?.defaultTitle || DEFAULT_TITLE;
-  let note: Note = initial || newNote(expandTitle(defaultTitle, titleVars(new Date(), source)) || DEFAULT_TITLE, Date.now());
+  const settings = stored.settings as Settings | undefined;
+  const defaultTitle = settings?.defaultTitle || DEFAULT_TITLE;
+  let note: Note = initial || newNote(
+    expandTitle(defaultTitle, titleVars(new Date(), source)) || DEFAULT_TITLE,
+    Date.now(),
+    temporaryFromUrl(location.href) ?? settings?.temporary === true,
+  );
   const showTitle = () => {
     titleEl.textContent = note.title;
     document.title = note.title;

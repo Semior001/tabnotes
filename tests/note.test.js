@@ -1038,6 +1038,64 @@ test('note page', async (t) => {
     }
   });
 
+  await t.test('new note takes its kind from the URL, then from settings', async (t) => {
+    const url = `${base}?id=${ID}`;
+    const cases = [
+      { name: 'no parameter, no settings', temporary: false },
+      { name: 'no parameter, setting temporary', settings: { temporary: true }, temporary: true },
+      { name: 'no parameter, setting of another type', settings: { temporary: 'yes' }, temporary: false },
+      { name: 'invalid parameter falls back', href: `${url}&temporary=2`, settings: { temporary: true }, temporary: true },
+      { name: 'URL temporary wins', href: `${url}&temporary=1`, settings: {}, temporary: true },
+      { name: 'URL permanent wins', href: `${url}&temporary=0`, settings: { temporary: true }, temporary: false },
+    ];
+    for (const c of cases) {
+      await t.test(c.name, async () => {
+        const { win, writes, type } = await runNote({
+          href: c.href,
+          storage: c.settings ? { settings: c.settings } : {},
+        });
+        type('a');
+        win.dispatch('pagehide');
+        assert.equal(writes().length, 1);
+        assert.equal(writes()[0][1][KEY].temporary === true, c.temporary);
+        // absence means permanent, so the key is never stored as false
+        assert.equal(Object.hasOwn(writes()[0][1][KEY], 'temporary'), c.temporary);
+      });
+    }
+  });
+
+  await t.test('a blank new note stores nothing, whatever its kind', async () => {
+    const { win, writes } = await runNote({ href: `${base}?id=${ID}&temporary=1` });
+    win.dispatch('pagehide');
+    assert.deepEqual(writes(), []);
+  });
+
+  await t.test('a stored note ignores the URL and the setting', async (t) => {
+    const cases = [
+      {
+        name: 'permanent stays permanent',
+        href: `${base}?id=${ID}&temporary=1`,
+        storage: { [KEY]: stored('a'), settings: { temporary: true } },
+        temporary: false,
+      },
+      {
+        name: 'temporary stays temporary',
+        href: `${base}?id=${ID}&temporary=0`,
+        storage: { [KEY]: stored('a', { temporary: true }) },
+        temporary: true,
+      },
+    ];
+    for (const c of cases) {
+      await t.test(c.name, async () => {
+        const { win, writes, type } = await runNote({ href: c.href, storage: c.storage });
+        type('ab');
+        win.dispatch('pagehide');
+        assert.equal(writes()[0][1][KEY].content, 'ab');
+        assert.equal(writes()[0][1][KEY].temporary === true, c.temporary);
+      });
+    }
+  });
+
   await t.test('new note expands a template default title', async () => {
     const { doc, els, calls } = await runNote({
       now: new Date(2026, 10, 1, 14, 5).getTime(),
