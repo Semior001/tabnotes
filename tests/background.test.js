@@ -112,6 +112,14 @@ test('toolbar click', async (t) => {
     assert.deepEqual(warnings, []);
   });
 
+  await t.test('the URL names no kind and reads nothing, as the note page takes it from settings', async () => {
+    const { click, of, calls } = await runBackground({ storage: { settings: { temporary: true } } });
+    calls.length = 0;
+    await click({ id: 7, index: 3, windowId: 2 });
+    assert.equal(of('tabs.create')[0][1].url, `moz-extension://uuid/note/note.html?id=${ID}`);
+    assert.deepEqual(calls.map(([name]) => name), ['tabs.create']);
+  });
+
   await t.test('rejected create is logged', async () => {
     const { click, warnings } = await runBackground({ reject: { 'tabs.create': true } });
     await click({ id: 7, index: 0 });
@@ -576,6 +584,17 @@ test('close sweep', async (t) => {
     assert.ok(Object.hasOwn(storage, `note:${ID}`));
     await sweepAt(NOW + 7 * DAY_MS);
     assert.equal(Object.hasOwn(storage, `note:${ID}`), false);
+  });
+
+  await t.test('a stored note with neither field never expires, whatever the map holds', async () => {
+    const storage = { [`note:${ID}`]: note(null), closedNotes: { [ID]: STALE } };
+    const { closeSweepAt, sweepAt } = await runBackground({ storage });
+    await closeSweepAt(NOW);
+    assert.deepEqual(storage.closedNotes, {});
+    await closeSweepAt(NOW + 3650 * DAY_MS);
+    await sweepAt(NOW + 3650 * DAY_MS);
+    assert.deepEqual(storage[`note:${ID}`], note(null));
+    assert.deepEqual(storage.closedNotes, {});
   });
 
   await t.test('an unchanged map is not written', async () => {
