@@ -16,6 +16,7 @@ Markdown notes that live in your Firefox tabs. Click the toolbar button and a no
 - **Images.** Drop or paste images into a note, up to 25 MB each.
 - **All notes.** Search, reopen and tidy up every note in one place, including tabs you closed.
 - **A bin.** Deleted notes stay for 30 days before they are removed.
+- **Permanent and temporary notes.** A temporary note you have closed cleans itself up after 30 days. A permanent note stays until you delete it.
 - **Light and dark.** Follow your system or pick one.
 - **Private.** Notes stay in this Firefox on this device. The extension makes no network requests.
 
@@ -73,26 +74,34 @@ A title can hold variables and functions, and the page lists them while you rena
 
 Functions follow the variable after a `|`, and each works on the result of the one before. On a tab titled "Fix the login redirect on mobile Safari", `{date} - {tab | trunc 30}` gives `2026-11-01 - Fix the login redirect on mob…`.
 
-`{tab}` and `{host}` are empty if the note was not opened from a tab, as with "New note" in All notes, or if that tab has since closed, and `{host}` is empty for anything but a web page. Text around an empty variable stays, so `{date} - {tab | trunc 30}` gives `2026-11-01 -` with no tab, and `{tab} - {host}` gives `-`. Text in braces that is not a known variable and function stays as you typed it.
+`{tab}` and `{host}` are empty if the note was not opened from a tab, as with the new note buttons in All notes, or if that tab has since closed, and `{host}` is empty for anything but a web page. Text around an empty variable stays, so `{date} - {tab | trunc 30}` gives `2026-11-01 -` with no tab, and `{tab} - {host}` gives `-`. Text in braces that is not a known variable and function stays as you typed it.
 
 ### Find your notes
 
-Open **All notes** from the header of any note. Notes are grouped into Open, Recently closed, Other notes and Bin. Click a row to go to the note, reopen its tab or restore it along with its window.
+Open **All notes** from the header of any note. Notes are grouped into Open, Recently closed, Other notes and Bin. Click a row to go to the note, reopen its tab or restore it along with its window. "New permanent note" and "New temporary note" open an empty note of that kind.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/all-notes-dark.png">
   <img alt="The All notes page with sections for open, recently closed, other and binned notes" src="docs/screenshots/all-notes-light.png">
 </picture>
 
-Press `/` to search. Tick rows, or Shift-click a range, to move several notes to the Bin at once. "Undo" brings them back, but not their tabs.
+Press `/` to search. Tick rows, or Shift-click a range, to move several notes to the Bin at once or to change their kind. "Undo" brings moved notes back, but not their tabs.
 
 ### Delete and restore
 
 "Move to Bin" closes the note's tabs and keeps the note for 30 days. Open the Bin section in All notes to restore it or delete it forever.
 
+### Permanent and temporary notes
+
+A permanent note is kept until you delete it. A temporary note moves to the Bin by itself after it has been closed for 30 days, and is deleted 7 days later. Editing the note restarts the 30 days. Notes from earlier versions are permanent.
+
+The toolbar button creates the kind chosen in Settings, permanent by default. To change a note's kind, click **Permanent** or **Temporary** in its header, use "Make temporary" or "Make permanent" on its row in All notes, or tick several rows. A note in the Bin keeps its kind, which you can change after restoring it.
+
+All notes marks temporary notes, and shows the days left on the ones that are closed. A temporary note restored from the Bin stays temporary, and its 30 days start again. "Move to Bin" keeps a note for 30 days, whatever its kind.
+
 ### Settings
 
-Choose the default title for new notes, the font size for all notes, and the theme. The default title can hold the same variables and functions as a rename, filled in when a note is created.
+Choose the default title for new notes, the kind of note the toolbar button creates, the font size for all notes, and the theme. The default title can hold the same variables and functions as a rename, filled in when a note is created.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
@@ -123,6 +132,7 @@ Use `Cmd` instead of `Ctrl` on Mac.
 - Remote images, such as `![](https://...)`, do not load. Add the image to the note instead.
 - HTML in a note is shown as plain text.
 - A deleted image still takes up space for at least 7 days, so you can undo the change.
+- Temporary notes are checked only while Firefox is running, so one can stay past its 30 days until the next time you start it.
 - Keep a note open if it shows a save error, for example when storage is full. Closing the tab loses the unsaved text.
 
 ## Development
