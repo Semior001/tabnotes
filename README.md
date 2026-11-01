@@ -33,7 +33,7 @@ The extension asks for these permissions:
 | Permission | Why |
 | --- | --- |
 | `storage` | Keep your notes and images in Firefox |
-| `tabs` | Open note tabs and find the ones already open |
+| `tabs` | Open note tabs, find the ones already open, and read the title and address of the tab a note was opened from for `{tab}` and `{host}` |
 | `sessions` | Restore note tabs you closed |
 
 ## Using tabnotes
@@ -53,7 +53,7 @@ To add an image, drop it into the editor or paste it from the clipboard.
 
 ### Rename a note
 
-Click the title in the note header, or focus it and press `Enter`, then type a new one. `Enter` or clicking away saves it, and `Esc` cancels. The tab title changes with it. Close the tab before saving and the new title is lost, and a note with no text yet keeps its title only while the tab is open.
+Click the title in the note header, or focus it and press `Enter` or `Space`, then type a new one. `Enter` or clicking away saves it, and `Esc` cancels. The tab title changes with it. Close the tab before saving and the new title is lost, and a note with no text yet keeps its title only while the tab is open.
 
 A title can hold variables and functions, and the page lists them while you rename. They are filled in once, when you save, so the title stays plain text afterwards:
 
@@ -73,7 +73,7 @@ A title can hold variables and functions, and the page lists them while you rena
 
 Functions follow the variable after a `|`, and each works on the result of the one before. On a tab titled "Fix the login redirect on mobile Safari", `{date} - {tab | trunc 30}` gives `2026-11-01 - Fix the login redirect on mob…`.
 
-`{tab}` and `{host}` are empty if the note was not opened from a tab, as with "New note" in All notes, and `{host}` is empty for anything but a web page. Text in braces that is not a known variable and function stays as you typed it.
+`{tab}` and `{host}` are empty if the note was not opened from a tab, as with "New note" in All notes, or if that tab has since closed, and `{host}` is empty for anything but a web page. Text around an empty variable stays, so `{date} - {tab | trunc 30}` gives `2026-11-01 -` with no tab, and `{tab} - {host}` gives `-`. Text in braces that is not a known variable and function stays as you typed it.
 
 ### Find your notes
 
@@ -105,7 +105,8 @@ Use `Cmd` instead of `Ctrl` on Mac.
 
 | Keys | Action |
 | --- | --- |
-| `Ctrl+E` | Switch between split, editor and preview |
+| `Ctrl+E` | Switch between split, editor and preview (does nothing while renaming) |
+| `Enter` or `Space` on the note title | Rename the note |
 | `Ctrl+B` | Bold |
 | `Ctrl+I` | Italic |
 | `Ctrl+K` | Insert a link |

@@ -131,9 +131,10 @@ test('options.html starts with the harness state', () => {
   assert.deepEqual(options, [['system', 'System'], ['light', 'Light'], ['dark', 'Dark']]);
   assert.match(html, /id="all-notes"[^>]*>All notes</);
   assert.match(html, /Default title for new notes/);
-  // the hint sits in the label, so .field + .field spacing still applies, and
-  // its text stays in code
-  assert.match(html, /<label class="field">\s*<span>[^<]*<\/span>\s*<input id="default-title"[^>]*>\s*<small id="title-hint"><\/small>\s*<\/label>/);
+  // the hint sits in .field for the spacing but outside the label, so it is not
+  // part of the input's name and a click on it does not focus the input; its
+  // text stays in code
+  assert.match(html, /<div class="field">\s*<label for="default-title">[^<]*<\/label>\s*<input id="default-title"[^>]*aria-describedby="title-hint"[^>]*>\s*<small id="title-hint"><\/small>\s*<\/div>/);
 });
 
 test('options page', async (t) => {

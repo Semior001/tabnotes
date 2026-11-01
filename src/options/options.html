@@ -12,11 +12,11 @@
     <button id="all-notes" type="button">All notes</button>
   </header>
   <p id="error" class="error" hidden>Could not load settings</p>
-  <label class="field">
-    <span>Default title for new notes</span>
-    <input id="default-title" type="text" placeholder="Notes" disabled>
+  <div class="field">
+    <label for="default-title">Default title for new notes</label>
+    <input id="default-title" type="text" placeholder="Notes" aria-describedby="title-hint" disabled>
     <small id="title-hint"></small>
-  </label>
+  </div>
   <label class="field">
     <span>Note font size (px)</span>
     <input id="font-size" type="number" min="10" max="32" step="1" disabled>

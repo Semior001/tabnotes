@@ -59,13 +59,14 @@ body {
 }
 
 /* out of flow: moving the panes on open and close would send the mouseup of a
-   click into the editor somewhere else. Above CodeMirror's own z-indexes. */
+   click into the editor somewhere else. Above CodeMirror's own z-indexes, 15 of
+   the search dialog included, as it opens in the same spot. */
 .title-hint {
   position: absolute;
   top: 100%;
   right: 0;
   left: 0;
-  z-index: 10;
+  z-index: 20;
   margin: var(--space-1) 0 0;
   padding: var(--space-1) var(--space-2);
   font-size: 0.85em;

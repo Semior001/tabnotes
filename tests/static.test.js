@@ -197,9 +197,9 @@ test('the rename hint sits over the panes', () => {
   assert.match(css, /\.title-hint \{\s*position: absolute;/);
 });
 
-test('the title hint is muted on both pages', () => {
-  assert.match(read('src', 'note', 'note.css'), /\.title-hint \{[^}]*color: var\(--color-muted\);/);
-  assert.match(read('src', 'options', 'options.css'), /#title-hint \{[^}]*color: var\(--color-muted\);/);
+// stop removes tabindex, so a stopped tab's title no longer looks editable
+test('only a title that can be renamed shows the text cursor', () => {
+  assert.match(read('src', 'note', 'note.css'), /\.header \.title\[tabindex\] \{\s*cursor: text;/);
 });
 
 // no fake layout shows these: a row must stay one line, and its actions must

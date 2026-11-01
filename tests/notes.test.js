@@ -1316,6 +1316,7 @@ test('expandTitle', async (t) => {
     ['{tab | trunc 3 4}', '{tab | trunc 3 4}'],
     ['{tab | trunc x}', '{tab | trunc x}'],
     ['{tab | trunc 1e2}', '{tab | trunc 1e2}'],
+    ['{tab | trunc 05}', '{tab | trunc 05}'],
   ]);
   await expands('unbalanced braces', [
     ['{date', '{date'],

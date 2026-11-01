@@ -27,7 +27,7 @@ export interface Settings {
 
 export const DEFAULT_TITLE = 'Notes';
 
-export interface TitleVars {
+interface TitleVars {
   date: string;
   time: string;
   weekday: string;
@@ -435,18 +435,6 @@ export function titleVars(now: Date, source: { title?: string; url?: string } | 
 // expandTitle makes one pass, so a value holding a placeholder is not expanded
 // again. A placeholder it cannot evaluate stays as literal text.
 export function expandTitle(template: string, vars: TitleVars): string {
-  const variable = (name: string): string | null => {
-    switch (name) {
-      case 'date':
-      case 'time':
-      case 'weekday':
-      case 'tab':
-      case 'host':
-        return vars[name];
-      default:
-        return null;
-    }
-  };
   const apply = (value: string, call: string): string | null => {
     const [fn, ...args] = call.split(/\s+/);
     switch (fn) {
@@ -467,7 +455,8 @@ export function expandTitle(template: string, vars: TitleVars): string {
   };
   const expanded = template.replace(/\{[^{}]*\}/g, (placeholder) => {
     const [name, ...calls] = placeholder.slice(1, -1).split('|').map((part) => part.trim());
-    let value = variable(name);
+    // own keys only, so {constructor} and {__proto__} stay literal
+    let value = Object.hasOwn(vars, name) ? vars[name as keyof TitleVars] : null;
     for (const call of calls) {
       if (value !== null) value = apply(value, call);
     }

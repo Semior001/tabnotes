@@ -119,18 +119,18 @@ declare const mermaid: typeof import('mermaid').default;
     onChange(changes[key]);
   });
 
-  const [stored, { current, source }] = await Promise.all([
+  const [stored, current] = await Promise.all([
     browser.storage.local.get([key, 'settings', 'fontSize', 'theme']).catch(warnOr('load note', null)),
-    browser.tabs.getCurrent().catch(warnOr('get current tab', null)).then(async (tab) => {
-      if (tab?.openerTabId === undefined) return { current: tab, source: null };
-      return { current: tab, source: await browser.tabs.get(tab.openerTabId).catch(warnOr('get source tab', null)) };
-    }),
+    browser.tabs.getCurrent().catch(warnOr('get current tab', null)),
   ]);
   // without the stored note a save could overwrite it with an empty one
   if (stored === null) {
     $('error').hidden = false;
     return;
   }
+  const source = current?.openerTabId === undefined
+    ? null
+    : await browser.tabs.get(current.openerTabId).catch(warnOr('get source tab', null));
   // opener for tabs this page opens and the address All notes stops this tab
   // by; links still open without one
   const tabId = current?.id;
@@ -229,6 +229,7 @@ declare const mermaid: typeof import('mermaid').default;
     stopped = true;
     cm!.setOption('readOnly', 'nocursor');
     closeRename();
+    titleEl.removeAttribute('role');
     titleEl.removeAttribute('tabindex');
     titleEl.removeAttribute('title');
     $('bin').hidden = true;
@@ -543,8 +544,9 @@ declare const mermaid: typeof import('mermaid').default;
     }
     mark.clear();
     if (problems.length > 0) showImageError(problems);
-    // preventing CodeMirror's drop handling also skips its focus call
-    if (isDrop) cm!.focus();
+    // preventing CodeMirror's drop handling also skips its focus call. A rename
+    // opened during the read keeps focus: the blur would commit a half-typed title.
+    if (isDrop && document.activeElement !== titleInput) cm!.focus();
   };
   cm.on('drop', (_, e) => {
     insertImages(e);
@@ -584,9 +586,9 @@ declare const mermaid: typeof import('mermaid').default;
     titleInput.focus();
     titleInput.select();
   };
-  // text equal to what was opened is left alone: expanding it again would change
-  // a stored title holding braces, and writing it would revert a rename adopted
-  // while the input was open. The save is flushed as a pending one could be
+  // text equal to what was opened, surrounding spaces aside, is left alone:
+  // expanding it again would change a stored title holding braces, and writing it
+  // would revert a rename adopted while the input was open. The save is flushed as a pending one could be
   // dropped as older than a restore, or lose the title to another tab's save.
   // The stamp is above the last write, here as edit does not stamp a blank note
   // and a clock can repeat: onChange adopts an equal updatedAt, as restore and
@@ -595,7 +597,7 @@ declare const mermaid: typeof import('mermaid').default;
     if (renaming === null) return;
     const opened = renaming;
     closeRename();
-    if (titleInput.value === opened) return;
+    if (titleInput.value.trim() === opened.trim()) return;
     const title = expandTitle(titleInput.value, titleVars(new Date(), source));
     if (title === '') return;
     note = { ...note, title, updatedAt: Math.max(Date.now(), note.updatedAt + 1) };
@@ -605,9 +607,14 @@ declare const mermaid: typeof import('mermaid').default;
   };
   titleEl.addEventListener('click', openRename);
   titleEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.repeat) openRename();
+    if ((e.key !== 'Enter' && e.key !== ' ') || e.repeat) return;
+    // a space would otherwise reach the input and replace the selected title
+    e.preventDefault();
+    openRename();
   });
   titleInput.addEventListener('keydown', (e) => {
+    // the Enter held to open the input must not close it
+    if (e.repeat) return;
     switch (e.key) {
       case 'Enter':
         commitRename();
@@ -625,6 +632,8 @@ declare const mermaid: typeof import('mermaid').default;
   titleInput.addEventListener('blur', () => {
     if (document.activeElement !== titleInput) commitRename();
   });
+  // the hint cannot take focus, so a press on it would blur the input and commit
+  titleHint.addEventListener('mousedown', (e) => e.preventDefault());
 
   // All notes sends one stop per tab before it closes the tabs and trashes or
   // removes the note: the reply waits for the flushed write to land and
