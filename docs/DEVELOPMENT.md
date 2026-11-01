@@ -90,7 +90,7 @@ RELEASE_VERSION=X.Y.Z node scripts/build.js
 
 ### Release
 
-Releases are public on GitHub, while the xpi is unlisted on AMO: there is no AMO listing, and the only place to get it is the release page, where anyone can download it and install it by hand.
+Releases are published on GitHub, while the xpi is unlisted on AMO: there is no AMO listing, and the only place to get it is the release page, from where it is installed by hand.
 
 Push `main`, then tag a commit on it:
 
@@ -119,11 +119,13 @@ Get the AMO credentials at https://addons.mozilla.org/developers/addon/api/key/ 
 
 **Maintainer-only guards.** A tag-triggered workflow runs the workflow file of the tagged commit, so a check inside the file does not bind someone who can push that commit and tag. GitHub settings are the real boundary, and they live outside this repo, so until they are set only the workflow checks apply. Before the first tag, create the `release` environment with the tag policy below and the secrets above: without them `task sign` stops at its credentials precondition.
 
-- Tag ruleset on `refs/tags/v*`: restricts creation, update and deletion, with the repository admin role as the only bypass. Whether that bypass role fits a personal repo is unverified.
-- `release` environment with a deployment policy of type tag, not branch, allowing only `v*.*.*`. A branch-type entry would let a branch named `v1.2.3` through. Add yourself as a required reviewer if offered; whether a private repo on Pro offers it is unverified.
-- `main` ruleset blocking force-push and deletion. With other collaborators, also require PRs, since the guards limit who releases, not what `main` holds: code on `main` is signed by the next tag.
-- Release immutability if offered, as a write collaborator could otherwise replace assets on a published release.
+- Tag ruleset `release tags` on `refs/tags/v*`: restricts creation, update and deletion, with the repository admin role as the only bypass.
+- `release` environment with a deployment policy of type tag, not branch, allowing only `v*.*.*`. A branch-type entry would let a branch named `v1.2.3` through. No required reviewer is set: add yourself once the repo is public, if offered; whether Pro offers it is unverified.
+- `main` ruleset on `refs/heads/main` blocking force-push and deletion, with no bypass. With other collaborators, also require PRs, since the guards limit who releases, not what `main` holds: code on `main` is signed by the next tag.
+- Release immutability, as a write collaborator could otherwise replace assets on a published release.
+- `sha_pinning_required` in the repo's Actions permissions, so a workflow using an action not pinned to a full SHA fails.
 - `ci.yml` checks as required on `main` if PRs become the only path.
+- To set when the repo goes public: fork PR approval for all external contributors, Dependabot alerts, secret scanning, push protection and private vulnerability reporting.
 
 The workflow checks are a second layer that catches mistakes and works if a setting is lost. Besides `guard`, the `release` job repeats the actor check, because "Re-run failed jobs" does not re-run a `guard` that passed. The trigger is tag pushes only, with no manual or chained trigger.
 
@@ -306,15 +308,14 @@ These checks need an interactive Firefox with Sidebery and are not covered by `n
 - [ ] Mermaid flowchart and sequence diagrams in dark, with no CSP errors in the console. A theme change keeps the preview's scroll position.
 - [ ] Transparent images in a note on the dark background: acceptable, as no backdrop is added.
 - [ ] No errors in the console of the background script and of the note, All notes and Settings pages.
-- [ ] First release on a real tag: the workflow signs the version as unlisted on AMO and publishes a GitHub release with the xpi attached; check the page while logged in. AMO accepts `--upload-source-code` on the unlisted channel; if it is rejected or unneeded there, drop the flag.
+- [ ] With the repo public, a release xpi downloads while logged out.
+- [ ] With the repo public, GitHub detects `LICENSE` as MIT.
 - [ ] `CLAUDE_CODE_OAUTH_TOKEN` works with `claude --print` on a runner: the log shows `release notes for vX.Y.Z: claude`. A failure only shows as a fallback in that `::notice`.
-- [ ] `pull-requests: read` is enough for `gh pr list`: the run has no `listing merged PRs failed` warning.
 - [ ] The actor `if` on the `release` job is evaluated again on "Re-run failed jobs".
 - [ ] A re-run after AMO approved a version is refused as a duplicate, and how that failure reads.
 - [ ] A PR run passes `task test`, the build test with `RELEASE_VERSION` and `task lint`.
-- [ ] A tag off `main` fails `guard` and a tag on `main` passes it.
+- [ ] A tag off `main` fails `guard`.
 - [ ] A re-run after a failure in the middle of `task sign` restores the uuid cache: the log of the cache step shows a hit and web-ext reuses the upload.
-- [ ] The file name of the signed xpi matches `*-X.Y.Z.xpi`. It comes from web-ext or AMO and is assumed by `gh release create`.
 - [ ] Compare the `gh pr list` and `gh release list` output of a real run with the fixtures in `tests/workflows.test.js` and `tests/release-notes.test.js`, which are hand-written as the repo has no PRs yet.
-- [ ] A branch named like a version gets no secrets from the `release` environment. Whether required reviewers are offered there on Pro, and whether the tag ruleset's admin bypass fits a personal repo, are checked when configuring.
+- [ ] A branch named like a version gets no secrets from the `release` environment.
 - [ ] Install the xpi from the release link on a second device; note whether Firefox offers to install or only downloads it.
