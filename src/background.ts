@@ -5,12 +5,13 @@
 import {
   noteUrl, notesFromStorage, storageKey, idFromStorageKey, expired, imageKey, sweepImages,
   withoutReferenced, orphansAfterFailedRemove, sameFirstSeen, noteIdFromUrl, sweepClosed,
-  closedAfterFailedWrite, expire, type ImageOrphans, type ClosedNotes,
+  closedAfterFailedWrite, stillDue, trashClosed, type ImageOrphans, type ClosedNotes,
 } from './lib/notes.ts';
 
 (function () {
   const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const CLOSE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
+  const noteBase = browser.runtime.getURL('note/note.html');
 
   const warn = (what: string) => (err: unknown) => console.warn(`tabnotes: ${what}:`, err);
   const warnOr = <T>(what: string, fallback: T) => (err: unknown): T => {
@@ -23,7 +24,7 @@ import {
   // windowId keeps it in the parent's window, which tabs.create requires of
   // an opener when that window is not the last focused one
   browser.browserAction.onClicked.addListener((tab) => {
-    const url = noteUrl(browser.runtime.getURL('note/note.html'), crypto.randomUUID());
+    const url = noteUrl(noteBase, crypto.randomUUID());
     const props = { url, openerTabId: tab.id, windowId: tab.windowId, index: tab.index + 1 };
     browser.tabs.create(props).catch(warn('open note tab'));
   });
@@ -78,7 +79,6 @@ import {
     const openNoteIds = async (what: string) => {
       const tabs = await browser.tabs.query({}).catch(warnOr(what, null));
       if (tabs === null) return null;
-      const noteBase = browser.runtime.getURL('note/note.html');
       return new Set(tabs.flatMap((tab) => noteIdFromUrl(tab.url, noteBase) ?? []));
     };
 
@@ -96,25 +96,17 @@ import {
     // transactions, so the read narrows the race with a save and does not close
     // it. null means a read failed and the map stays as it is.
     const binDue = async (): Promise<ClosedNotes | null> => {
-      if (sweep.expire.length === 0) return sweep.closed;
-      const fresh = await browser.storage.local.get(sweep.expire.map(storageKey))
+      if (sweep.due.length === 0) return sweep.closed;
+      const fresh = await browser.storage.local.get(sweep.due.map(storageKey))
         .catch(warnOr('load due notes', null));
       if (fresh === null) return null;
       const openNow = await openNoteIds('list tabs for due notes');
       if (openNow === null) return null;
-      const current = notesFromStorage(fresh);
-      const failed: string[] = [];
-      await Promise.all(sweep.expire.map(async (id) => {
-        const note = current[id];
-        if (note === undefined || note.deletedAt !== null || !note.temporary) return;
-        const before = notes[id];
-        if (openNow.has(id) || note.updatedAt !== before.updatedAt || note.restoredAt !== before.restoredAt) return;
-        await browser.storage.local.set({ [storageKey(id)]: expire(note, now) }).catch((err: unknown) => {
-          warn('bin closed note')(err);
-          failed.push(id);
-        });
-      }));
-      return closedAfterFailedWrite(sweep, failed, closed);
+      const due = stillDue(sweep.due, notes, notesFromStorage(fresh), openNow);
+      const failed = await Promise.all(due.map(({ id, note }) =>
+        browser.storage.local.set({ [storageKey(id)]: trashClosed(note, now) })
+          .then(() => null).catch(warnOr('bin closed note', id))));
+      return closedAfterFailedWrite(sweep, failed.filter((id) => id !== null), closed);
     };
 
     const kept = await binDue();

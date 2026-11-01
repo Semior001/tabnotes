@@ -247,17 +247,17 @@ declare const mermaid: typeof import('mermaid').default;
     kindEl.hidden = true;
     $('deleted').hidden = false;
   };
-  const showBin = () => {
+  const showState = () => {
     $('bin').hidden = note.deletedAt === null;
     kindEl.hidden = note.deletedAt !== null;
     kindEl.textContent = note.temporary ? 'Temporary' : 'Permanent';
     if (note.deletedAt === null) return;
     $('bin-text').textContent = `This note is in the bin (${daysLeftText(note, Date.now())})`;
   };
-  showBin();
+  showState();
   // a binned note left open for days would show a stale count
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && !stopped) showBin();
+    if (!document.hidden && !stopped) showState();
   });
 
   // one synchronous storage call per save, so flush() completes from pagehide;
@@ -581,7 +581,7 @@ declare const mermaid: typeof import('mermaid').default;
   $('restore').addEventListener('click', () => {
     if (stopped) return;
     note = restore(note, Date.now());
-    showBin();
+    showState();
     saver.schedule();
     saver.flush();
   });
@@ -591,7 +591,7 @@ declare const mermaid: typeof import('mermaid').default;
   kindEl.addEventListener('click', () => {
     if (stopped || note.deletedAt !== null) return;
     note = setTemporary(note, !note.temporary, Date.now());
-    showBin();
+    showState();
     saver.schedule();
     saver.flush();
   });
@@ -681,12 +681,12 @@ declare const mermaid: typeof import('mermaid').default;
     if (newValue.updatedAt < note.updatedAt) return;
     if (saver.pending()) {
       note = { ...newValue, content: note.content };
-      showBin();
+      showState();
       showTitle();
       return;
     }
     note = newValue;
-    showBin();
+    showState();
     showTitle();
     if (cm!.getValue() === note.content) return;
     cm!.operation(() => {

@@ -77,7 +77,7 @@ export type ClosedNotes = Record<string, number>;
 // stand once they are binned.
 interface ClosedSweep {
   closed: ClosedNotes;
-  expire: string[];
+  due: string[];
 }
 
 // StopMessage asks a note tab to flush and stop writing, see All notes
@@ -175,9 +175,6 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 const BIN_DAYS = 30;
 const TEMPORARY_DAYS = 30;
 const EXPIRED_BIN_DAYS = 7;
-
-// KIND_HINT is the tooltip of the kind button on the note page
-export const KIND_HINT = `Temporary notes move to the Bin after ${TEMPORARY_DAYS} days closed and are deleted ${EXPIRED_BIN_DAYS} days later. Click to switch.`;
 const IMAGE_GRACE_DAYS = 7;
 const FONT_SIZE_DEFAULT = 14;
 const FONT_SIZE_MIN = 10;
@@ -185,6 +182,8 @@ const FONT_SIZE_MAX = 32;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 // STORAGE_FULL_HINT follows a failed write, of an image or a note
 export const STORAGE_FULL_HINT = `Storage may be full, and deleted images free space only after ${IMAGE_GRACE_DAYS} days.`;
+// KIND_HINT is the tooltip of the kind button on the note page
+export const KIND_HINT = `Temporary notes move to the Bin after ${TEMPORARY_DAYS} days closed and are deleted ${EXPIRED_BIN_DAYS} days later. Click to switch.`;
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
 // idAfter returns the id following prefix in s, or null if s is anything else
@@ -247,7 +246,7 @@ export function notesFromStorage(stored: Record<string, unknown>): Record<string
   return notes;
 }
 
-export function newNote(title: string, now: number, temporary = false): LiveNote {
+export function newNote(title: string, now: number, temporary: boolean): LiveNote {
   const note: LiveNote = { title, content: '', updatedAt: now, deletedAt: null };
   return temporary ? { ...note, temporary: true } : note;
 }
@@ -259,20 +258,21 @@ export function edit(note: Note, content: string, now: number): Note | null {
   return { ...note, content, updatedAt: now };
 }
 
-// rename returns the renamed note, or null for an empty title. The stamp stays
-// above updatedAt: a tab adopts an equal one, so the echo of an earlier write
-// would take the title back.
+// nextStamp stays above updatedAt: a tab adopts an equal one, so the echo of an
+// earlier write would take the change back.
+const nextStamp = (note: Note, now: number) => Math.max(now, note.updatedAt + 1);
+
+// rename returns the renamed note, or null for an empty title.
 export function rename(note: Note, title: string, now: number): Note | null {
   if (title === '') return null;
-  return { ...note, title, updatedAt: Math.max(now, note.updatedAt + 1) };
+  return { ...note, title, updatedAt: nextStamp(note, now) };
 }
 
-// setTemporary changes the kind. The stamp stays above updatedAt for the same
-// reason as in rename. The same-kind check is the caller's: a stamp here would
-// restart the 30 days.
+// setTemporary changes the kind. The same-kind check is the caller's: a stamp
+// here would restart the 30 days.
 export function setTemporary(note: LiveNote, temporary: boolean, now: number): LiveNote {
   const { temporary: _, ...rest } = note;
-  const stamped: LiveNote = { ...rest, updatedAt: Math.max(now, note.updatedAt + 1) };
+  const stamped: LiveNote = { ...rest, updatedAt: nextStamp(note, now) };
   return temporary ? { ...stamped, temporary: true } : stamped;
 }
 
@@ -280,13 +280,14 @@ export function trash(note: Note, now: number): BinnedNote {
   return { ...note, deletedAt: now };
 }
 
-// expire bins a temporary note closed for too long, for a shorter stay than a
-// note binned by hand.
-export function expire(note: LiveNote, now: number): BinnedNote {
+// trashClosed bins a temporary note closed for too long, for a shorter stay
+// than a note binned by hand.
+export function trashClosed(note: LiveNote, now: number): BinnedNote {
   return { ...trash(note, now), binDays: EXPIRED_BIN_DAYS };
 }
 
 export function restore(note: Note, now: number): LiveNote {
+  // the cast only reaches binDays, which a live note does not have
   const { binDays: _, ...rest } = note as BinnedNote;
   return { ...rest, deletedAt: null, restoredAt: now };
 }
@@ -832,16 +833,34 @@ export function sweepClosed(
   closed: ClosedNotes,
   now: number,
 ): ClosedSweep {
-  const sweep: ClosedSweep = { closed: {}, expire: [] };
+  const sweep: ClosedSweep = { closed: {}, due: [] };
   for (const [id, note] of Object.entries(notes)) {
     if (note.deletedAt !== null || !note.temporary || openIds.has(id)) continue;
     if (closedDaysLeft(closed[id], note, now) === 0) {
-      sweep.expire.push(id);
+      sweep.due.push(id);
       continue;
     }
     sweep.closed[id] = closed[id] ?? now;
   }
   return sweep;
+}
+
+// stillDue narrows due ids to the notes safe to bin, given before as the notes
+// the sweep saw and current and openNow as read again right before the write.
+// updatedAt and restoredAt show a note changed since: a stale copy would undo
+// the change, and a restore keeps updatedAt.
+export function stillDue(
+  due: string[],
+  before: Record<string, Note>,
+  current: Record<string, Note>,
+  openNow: Set<string>,
+): { id: string; note: LiveNote }[] {
+  return due.flatMap((id) => {
+    const note = current[id];
+    if (note === undefined || note.deletedAt !== null || !note.temporary || openNow.has(id)) return [];
+    const { updatedAt, restoredAt } = before[id];
+    return note.updatedAt === updatedAt && note.restoredAt === restoredAt ? [{ id, note }] : [];
+  });
 }
 
 // closedAfterFailedWrite is the map when failedIds could not be binned: an id

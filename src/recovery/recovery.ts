@@ -43,7 +43,9 @@ type Words = [string, string, string];
   let undo: string[] = [];
   let visible = { open: [] as string[], recent: [] as string[], other: [] as string[], bin: [] as string[] };
 
-  const listed = (key: string) => idFromStorageKey(key) !== null || key === 'settings' || key === 'closedNotes';
+  // settings names notes through its default title and closedNotes holds their
+  // countdowns; other keys do not change the list
+  const affectsList = (key: string) => idFromStorageKey(key) !== null || key === 'settings' || key === 'closedNotes';
 
   const warn = (what: string) => (err: unknown) => console.warn(`tabnotes: ${what}:`, err);
   const warnOr = <T>(what: string, fallback: T) => (err: unknown): T => {
@@ -137,7 +139,7 @@ type Words = [string, string, string];
 
   // open tabs adopt the kind through storage.onChanged, so nothing is stopped; a
   // note already of that kind is not stamped, which would restart its 30 days
-  const toggleItem = (temporary: boolean) => async ({ id }: { id: string }): Promise<Outcome> => {
+  const setKindItem = (temporary: boolean) => async ({ id }: { id: string }): Promise<Outcome> => {
     const key = storageKey(id);
     const fresh = await reload(key);
     if (fresh === undefined) return 'failed';
@@ -189,8 +191,8 @@ type Words = [string, string, string];
 
   const moveItems = (items: Entry[]) => bulk(items, trashItem, MOVED, (done) => done);
   const restoreItems = (items: Entry[]) => bulk(items, restoreItem, RESTORED, () => []);
-  const toggleItems = (items: Entry[], temporary: boolean) =>
-    bulk(items, toggleItem(temporary), temporary ? TO_TEMPORARY : TO_PERMANENT, () => []);
+  const setKindItems = (items: Entry[], temporary: boolean) =>
+    bulk(items, setKindItem(temporary), temporary ? TO_TEMPORARY : TO_PERMANENT, () => []);
   const undoMove = () => bulk(undo.map((id) => ({ id })), restoreItem, RESTORED, (_, failed) => failed);
 
   const deleteItems = (items: Entry[], question: string) => {
@@ -202,8 +204,8 @@ type Words = [string, string, string];
     items.length === 1 ? `Delete "${texts.get(items[0].id)?.name}" forever?` : `Delete ${items.length} notes forever?`;
 
   const kindButton = (item: Entry) => {
-    const temporary = item.note.temporary === true;
-    return button('kind', temporary ? 'Make permanent' : 'Make temporary', () => toggleItems([item], !temporary));
+    const { temporary } = item.note;
+    return button('kind', temporary ? 'Make permanent' : 'Make temporary', () => setKindItems([item], !temporary));
   };
 
   // each row's item matches its section, which the types cannot follow through
@@ -403,7 +405,7 @@ type Words = [string, string, string];
       // never get(null): that would load the bytes of every image
       const keys = await browser.storage.local.getKeys();
       data = await Promise.all([
-        browser.storage.local.get(keys.filter(listed)),
+        browser.storage.local.get(keys.filter(affectsList)),
         browser.tabs.query({}),
         browser.sessions.getRecentlyClosed(),
       ]);
@@ -475,7 +477,7 @@ type Words = [string, string, string];
     if (inside) $('bin-summary').focus();
   });
   for (const kind of ['permanent', 'temporary'] as const) {
-    $(`bar-${kind}`).addEventListener('click', () => toggleItems(selectedItems(), kind === 'temporary').then(() => refresh()));
+    $(`bar-${kind}`).addEventListener('click', () => setKindItems(selectedItems(), kind === 'temporary').then(() => refresh()));
     $(`new-${kind}`).addEventListener('click', () => {
       browser.tabs.create({ url: noteUrl(noteBase, crypto.randomUUID(), kind === 'temporary') }).catch(warn(`new ${kind} note`));
     });
@@ -496,10 +498,8 @@ type Words = [string, string, string];
   $('settings').addEventListener('click', () => {
     browser.runtime.openOptionsPage().catch(warn('open settings'));
   });
-  // settings names notes through its default title and closedNotes holds their
-  // countdowns; other keys do not change the list
   browser.storage.onChanged.addListener((changes) => {
-    if (Object.keys(changes).some(listed)) refresh();
+    if (Object.keys(changes).some(affectsList)) refresh();
   });
   browser.sessions.onChanged.addListener(() => refresh());
   browser.tabs.onRemoved.addListener(() => refresh());

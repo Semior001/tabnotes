@@ -11,7 +11,7 @@ const {
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameFirstSeen,
   titleVars, expandTitle, TITLE_HINT, KIND_HINT,
-  setTemporary, expire, temporaryFromUrl, sweepClosed, closedAfterFailedWrite, closedDaysLeft, closedDaysLeftText,
+  setTemporary, trashClosed, temporaryFromUrl, sweepClosed, stillDue, closedAfterFailedWrite, closedDaysLeft, closedDaysLeftText,
 } = require('../src/lib/notes.ts');
 
 test('canOpen', async (t) => {
@@ -1464,7 +1464,6 @@ test('note kind', async (t) => {
   await t.test('newNote adds the key only when temporary', () => {
     assert.deepEqual(newNote('T', 5, true), { title: 'T', content: '', updatedAt: 5, deletedAt: null, temporary: true });
     assert.equal(Object.hasOwn(newNote('T', 5, false), 'temporary'), false);
-    assert.equal(Object.hasOwn(newNote('T', 5), 'temporary'), false);
   });
 
   await t.test('setTemporary sets and removes the key', () => {
@@ -1495,16 +1494,16 @@ test('note kind', async (t) => {
   });
 });
 
-test('expire', async (t) => {
+test('trashClosed', async (t) => {
   const now = 1000 * DAY;
   const note = { ...newNote('T', 1, true), content: 'x' };
 
   await t.test('bins the note for 7 days', () => {
-    assert.deepEqual(expire(note, now), { ...note, deletedAt: now, binDays: 7 });
+    assert.deepEqual(trashClosed(note, now), { ...note, deletedAt: now, binDays: 7 });
   });
 
   await t.test('daysLeft honours binDays', () => {
-    const binned = expire(note, now);
+    const binned = trashClosed(note, now);
     assert.equal(daysLeft(binned, now), 7);
     assert.equal(daysLeft(binned, now + 7 * DAY - 1), 1);
     assert.equal(daysLeft(binned, now + 7 * DAY), 0);
@@ -1522,13 +1521,13 @@ test('expire', async (t) => {
   });
 
   await t.test('restore drops binDays and keeps the kind', () => {
-    const restored = restore(expire(note, now), now + 1);
+    const restored = restore(trashClosed(note, now), now + 1);
     assert.deepEqual(restored, { ...note, restoredAt: now + 1 });
     assert.equal(Object.hasOwn(restored, 'binDays'), false);
   });
 
   await t.test('a restored note binned by hand gets the full stay', () => {
-    assert.equal(daysLeft(trash(restore(expire(note, now), now), now), now), 30);
+    assert.equal(daysLeft(trash(restore(trashClosed(note, now), now), now), now), 30);
   });
 });
 
@@ -1538,16 +1537,16 @@ test('sweepClosed', async (t) => {
   const none = new Set();
 
   await t.test('a closed temporary note enters with the time of the sweep', () => {
-    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, {}, now), { closed: { [ID1]: now }, expire: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, {}, now), { closed: { [ID1]: now }, due: [] });
   });
 
   await t.test('a known note keeps its first sighting', () => {
     const closed = { [ID1]: now - DAY };
-    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, closed, now), { closed, expire: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, closed, now), { closed, due: [] });
   });
 
   await t.test('an old note with no entry is not due on its first sighting', () => {
-    assert.deepEqual(sweepClosed({ [ID1]: temp(0) }, none, {}, now).expire, []);
+    assert.deepEqual(sweepClosed({ [ID1]: temp(0) }, none, {}, now).due, []);
   });
 
   const { temporary: _, ...stored } = temp();
@@ -1559,43 +1558,72 @@ test('sweepClosed', async (t) => {
   ];
   for (const [name, note, open] of leaves) {
     await t.test(`${name} leaves the map and is not due`, () => {
-      assert.deepEqual(sweepClosed({ [ID1]: note }, open, { [ID1]: now - 40 * DAY }, now), { closed: {}, expire: [] });
+      assert.deepEqual(sweepClosed({ [ID1]: note }, open, { [ID1]: now - 40 * DAY }, now), { closed: {}, due: [] });
     });
   }
 
   await t.test('a removed note leaves the map', () => {
-    assert.deepEqual(sweepClosed({}, none, { [ID1]: now - 40 * DAY }, now), { closed: {}, expire: [] });
+    assert.deepEqual(sweepClosed({}, none, { [ID1]: now - 40 * DAY }, now), { closed: {}, due: [] });
   });
 
   await t.test('the note is due exactly at 30 days', () => {
     const before = { [ID1]: now - 30 * DAY + 1 };
-    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, before, now), { closed: before, expire: [] });
-    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, { [ID1]: now - 30 * DAY }, now), { closed: {}, expire: [ID1] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, before, now), { closed: before, due: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp() }, none, { [ID1]: now - 30 * DAY }, now), { closed: {}, due: [ID1] });
   });
 
   await t.test('updatedAt postpones expiry and keeps the first sighting', () => {
     const closed = { [ID1]: now - 40 * DAY };
-    assert.deepEqual(sweepClosed({ [ID1]: temp(now - DAY) }, none, closed, now), { closed, expire: [] });
-    assert.deepEqual(sweepClosed({ [ID1]: temp(now - 30 * DAY) }, none, closed, now), { closed: {}, expire: [ID1] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp(now - DAY) }, none, closed, now), { closed, due: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: temp(now - 30 * DAY) }, none, closed, now), { closed: {}, due: [ID1] });
   });
 
   await t.test('a restore restarts the clock over a stale entry, and the entry stays', () => {
     const closed = { [ID1]: now - 40 * DAY };
     const restored = (at) => ({ ...temp(), restoredAt: at });
-    assert.deepEqual(sweepClosed({ [ID1]: restored(now - 1) }, none, closed, now), { closed, expire: [] });
-    assert.deepEqual(sweepClosed({ [ID1]: restored(now - 30 * DAY) }, none, closed, now), { closed: {}, expire: [ID1] });
+    assert.deepEqual(sweepClosed({ [ID1]: restored(now - 1) }, none, closed, now), { closed, due: [] });
+    assert.deepEqual(sweepClosed({ [ID1]: restored(now - 30 * DAY) }, none, closed, now), { closed: {}, due: [ID1] });
   });
 
   await t.test('each note is decided on its own', () => {
     const notes = { [ID1]: temp(), [ID2]: temp(), [ID3]: temp(), [ID4]: newNote('T', 0) };
     const closed = { [ID1]: now - 31 * DAY, [ID2]: now - 31 * DAY };
-    assert.deepEqual(sweepClosed(notes, new Set([ID2]), closed, now), { closed: { [ID3]: now }, expire: [ID1] });
+    assert.deepEqual(sweepClosed(notes, new Set([ID2]), closed, now), { closed: { [ID3]: now }, due: [ID1] });
+  });
+});
+
+test('stillDue', async (t) => {
+  const before = { ...newNote('T', 5, true), content: 'x' };
+  const none = new Set();
+
+  await t.test('keeps a note unchanged since the sweep, with the note as read now', () => {
+    const current = { ...before, title: 'read again' };
+    assert.deepEqual(stillDue([ID1], { [ID1]: before }, { [ID1]: current }, none), [{ id: ID1, note: current }]);
+  });
+
+  const skipped = [
+    ['removed', {}, none],
+    ['binned', { [ID1]: trash(before, 9) }, none],
+    ['made permanent', { [ID1]: { ...before, temporary: undefined } }, none],
+    ['open again', { [ID1]: before }, new Set([ID1])],
+    ['edited', { [ID1]: { ...before, updatedAt: 6 } }, none],
+    ['restored', { [ID1]: { ...before, restoredAt: 9 } }, none],
+  ];
+  for (const [name, current, open] of skipped) {
+    await t.test(`skips a note ${name}`, () => {
+      assert.deepEqual(stillDue([ID1], { [ID1]: before }, current, open), []);
+    });
+  }
+
+  await t.test('decides per id', () => {
+    const notes = { [ID1]: before, [ID2]: before };
+    assert.deepEqual(stillDue([ID1, ID2], notes, notes, new Set([ID1])), [{ id: ID2, note: before }]);
   });
 });
 
 test('closedAfterFailedWrite keeps a failed id with its first sighting', () => {
   const closed = { [ID1]: 10, [ID2]: 20, [ID3]: 30 };
-  const sweep = { closed: { [ID3]: 30 }, expire: [ID1, ID2] };
+  const sweep = { closed: { [ID3]: 30 }, due: [ID1, ID2] };
   assert.deepEqual(closedAfterFailedWrite(sweep, [ID2], closed), { [ID2]: 20, [ID3]: 30 });
   assert.deepEqual(closedAfterFailedWrite(sweep, [], closed), { [ID3]: 30 });
   assert.deepEqual(sweep.closed, { [ID3]: 30 });
