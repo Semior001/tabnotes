@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { bundle } = require('./bundle.js');
-const { STORAGE_FULL_HINT } = require('../src/lib/notes.ts');
+const { STORAGE_FULL_HINT, TITLE_HINT } = require('../src/lib/notes.ts');
 
 const root = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
@@ -47,10 +47,18 @@ function element(attrs = {}, focus = { active: null }) {
       for (const fn of listeners[type] || []) fn(e);
       return e;
     },
+    // moving focus dispatches no blur on the previous element: tests do that
     focus() {
       if (this.hidden || (this.parent && this.parent.hidden) || focus.active === this) return;
       focus.active = this;
       this.dispatch('focusin');
+    },
+    selected: false,
+    select() {
+      this.selected = true;
+    },
+    removeAttribute(name) {
+      delete this[name];
     },
   };
 }
@@ -526,7 +534,9 @@ async function runNote({
     invalid: element({ hidden: true }, focus),
     error: element({ hidden: true }, focus),
     page,
-    title: element({ parent: page }, focus),
+    title: element({ parent: page, tabindex: '0', title: 'Rename' }, focus),
+    'title-input': element({ hidden: true, parent: page }, focus),
+    'title-hint': element({ hidden: true, parent: page }, focus),
     mode: element({ textContent: 'Split', parent: page }, focus),
     'all-notes': element({ parent: page }, focus),
     settings: element({ parent: page }, focus),
@@ -740,6 +750,8 @@ test('note.html loads its scripts and starts with the harness state', () => {
     error: true,
     page: true,
     title: false,
+    'title-input': true,
+    'title-hint': true,
     mode: false,
     'all-notes': false,
     settings: false,
@@ -758,6 +770,9 @@ test('note.html loads its scripts and starts with the harness state', () => {
     assert.ok(tag, id);
     assert.equal(/\shidden[\s>]/.test(tag[0]), want, id);
   }
+  assert.match(html, /id="title"[^>]*tabindex="0" title="Rename"/);
+  assert.match(html, /id="title-input"[^>]*aria-label="Note title"/);
+  assert.match(html, /id="title-hint"[^>]*><\/p>/);
   assert.match(html, /id="invalid"[^>]*>Invalid note link</);
   assert.match(html, /id="error"[^>]*>Could not load note</);
   assert.match(html, /id="preview"[^>]*tabindex="0"/);
@@ -2153,6 +2168,237 @@ test('note page', async (t) => {
       const { message } = await runNote(opts);
       assert.deepEqual(message({ type: 'stop', id: ID, tabId: 7 }), []);
     }
+  });
+
+  await t.test('rename', async (t) => {
+    // a function, as a write that lands changes the storage object it was given
+    const opts = () => ({ storage: { [KEY]: stored('a') } });
+    // open returns the input with text typed into it; every commit below goes
+    // through this, so what opens is checked in one place only
+    const open = (page, text) => {
+      const input = page.els['title-input'];
+      page.els.title.dispatch('click');
+      if (text !== undefined) input.value = text;
+      return input;
+    };
+    const press = (input, key, props = {}) => input.dispatch('keydown', { key, ...props });
+    const closed = (els) => {
+      assert.equal(els['title-input'].hidden, true);
+      assert.equal(els['title-hint'].hidden, true);
+      assert.equal(els.title.hidden, false);
+    };
+
+    await t.test('opens', async (t) => {
+      const cases = [
+        { name: 'on click', act: (title) => title.dispatch('click') },
+        { name: 'on Enter', act: (title) => title.dispatch('keydown', { key: 'Enter' }) },
+      ];
+      for (const c of cases) {
+        await t.test(c.name, async () => {
+          const { els } = await runNote(opts());
+          c.act(els.title);
+          const input = els['title-input'];
+          assert.equal(input.hidden, false);
+          assert.equal(input.value, 'Jira');
+          assert.equal(input.focused, true);
+          assert.equal(input.selected, true);
+          assert.equal(els.title.hidden, true);
+          assert.equal(els['title-hint'].hidden, false);
+          assert.equal(els['title-hint'].textContent, TITLE_HINT);
+        });
+      }
+    });
+
+    await t.test('other keys and a held Enter do not open', async () => {
+      const { els } = await runNote(opts());
+      els.title.dispatch('keydown', { key: 'a' });
+      els.title.dispatch('keydown', { key: 'Enter', repeat: true });
+      closed(els);
+    });
+
+    await t.test('Enter commits and returns focus to the title', async () => {
+      const page = await runNote(opts());
+      const { els, doc, writes } = page;
+      press(open(page, 'New'), 'Enter');
+      closed(els);
+      assert.equal(els.title.focused, true);
+      assert.equal(els.title.textContent, 'New');
+      assert.equal(doc.title, 'New');
+      assert.deepEqual(writes(), [
+        ['storage.local.set', { [KEY]: { title: 'New', content: 'a', updatedAt: 1000, deletedAt: null } }],
+      ]);
+    });
+
+    await t.test('Esc cancels and returns focus to the title', async () => {
+      const page = await runNote(opts());
+      const { els, doc, writes } = page;
+      press(open(page, 'New'), 'Escape');
+      closed(els);
+      assert.equal(els.title.focused, true);
+      assert.equal(els.title.textContent, 'Jira');
+      assert.equal(doc.title, 'Jira');
+      assert.deepEqual(writes(), []);
+    });
+
+    await t.test('blur commits', async () => {
+      const page = await runNote(opts());
+      const input = open(page, 'New');
+      page.cm().focus();
+      input.dispatch('blur');
+      closed(page.els);
+      assert.equal(page.els.title.textContent, 'New');
+      assert.equal(page.writes().length, 1);
+    });
+
+    await t.test('variables expand with the source read at load', async () => {
+      const page = await runNote({
+        ...opts(),
+        tab: { id: 7, windowId: 1, openerTabId: 3 },
+        sourceTab: { title: 'Source', url: 'https://github.com/x' },
+      });
+      press(open(page, '{host}: {tab | upper}'), 'Enter');
+      assert.equal(page.els.title.textContent, 'github.com: SOURCE');
+      assert.equal(page.calls.filter(([name]) => name === 'tabs.get').length, 1);
+    });
+
+    await t.test('an empty result keeps the old title', async () => {
+      const page = await runNote(opts());
+      press(open(page, ' {tab} '), 'Enter');
+      closed(page.els);
+      assert.equal(page.els.title.textContent, 'Jira');
+      assert.deepEqual(page.writes(), []);
+    });
+
+    await t.test('one close per opening', async (t) => {
+      await t.test('Enter then blur writes once', async () => {
+        const page = await runNote(opts());
+        const input = open(page, 'New');
+        press(input, 'Enter');
+        input.dispatch('blur');
+        assert.equal(page.writes().length, 1);
+      });
+
+      await t.test('Esc then blur writes nothing', async () => {
+        const page = await runNote(opts());
+        const input = open(page, 'New');
+        press(input, 'Escape');
+        input.dispatch('blur');
+        assert.equal(page.els.title.textContent, 'Jira');
+        assert.deepEqual(page.writes(), []);
+      });
+
+      await t.test('stop then blur writes nothing', async () => {
+        const page = await runNote(opts());
+        const input = open(page, 'New');
+        await page.message({ type: 'stop', id: ID, tabId: 7 })[0];
+        page.els.preview.focus();
+        input.dispatch('blur');
+        assert.equal(page.els.title.textContent, 'Jira');
+        assert.deepEqual(page.writes(), []);
+      });
+
+      await t.test('blur with the input still active keeps it open', async () => {
+        const page = await runNote(opts());
+        const input = open(page, 'New');
+        input.dispatch('blur');
+        assert.equal(input.hidden, false);
+        assert.equal(input.value, 'New');
+        assert.deepEqual(page.writes(), []);
+        press(input, 'Enter');
+        assert.equal(page.els.title.textContent, 'New');
+      });
+
+      await t.test('text equal to the opened value writes nothing', async (t) => {
+        const cases = [
+          { name: 'plain title', title: 'Jira' },
+          { name: 'title holding braces is not expanded again', title: 'about {date}' },
+        ];
+        for (const c of cases) {
+          await t.test(c.name, async () => {
+            const page = await runNote({ storage: { [KEY]: stored('a', { title: c.title }) } });
+            press(open(page), 'Enter');
+            closed(page.els);
+            assert.equal(page.els.title.textContent, c.title);
+            assert.deepEqual(page.writes(), []);
+          });
+        }
+      });
+    });
+
+    await t.test('saving', async (t) => {
+      await t.test('writes at once, with unsaved editor content, leaving nothing pending', async () => {
+        const page = await runNote(opts());
+        page.type('ab');
+        press(open(page, 'New'), 'Enter');
+        assert.deepEqual(page.writes(), [
+          ['storage.local.set', { [KEY]: { title: 'New', content: 'ab', updatedAt: 1000, deletedAt: null } }],
+        ]);
+        page.clock.run();
+        assert.equal(page.writes().length, 1);
+      });
+
+      await t.test('a blank note stays unstored and later typing stores the title', async () => {
+        const page = await runNote();
+        press(open(page, 'New'), 'Enter');
+        assert.equal(page.els.title.textContent, 'New');
+        assert.equal(page.writes().some(([name]) => name === 'storage.local.set'), false);
+        page.type('hi');
+        page.clock.run();
+        assert.deepEqual(page.writes().at(-1), [
+          'storage.local.set',
+          { [KEY]: { title: 'New', content: 'hi', updatedAt: 1000, deletedAt: null } },
+        ]);
+      });
+
+      await t.test('a binned note stays binned', async () => {
+        const page = await runNote({ storage: { [KEY]: stored('a', { deletedAt: 5 }) } });
+        press(open(page, 'New'), 'Enter');
+        assert.deepEqual(page.writes(), [
+          ['storage.local.set', { [KEY]: { title: 'New', content: 'a', updatedAt: 1000, deletedAt: 5 } }],
+        ]);
+        assert.equal(page.els.bin.hidden, false);
+      });
+
+      await t.test('a failed save shows the banner', async () => {
+        const page = await runNote({ ...opts(), reject: { 'storage.local.set': true } });
+        press(open(page, 'New'), 'Enter');
+        await settle();
+        assert.equal(page.els['save-error'].hidden, false);
+        assert.deepEqual(page.warnings.map((w) => w[0]), ['tabnotes: save note:']);
+      });
+    });
+
+    await t.test('Ctrl+E in the input neither cycles nor commits', async () => {
+      const page = await runNote(opts());
+      const input = open(page, 'New');
+      input.focus();
+      const e = page.doc.dispatch('keydown', { ctrlKey: true, code: 'KeyE', key: 'e' });
+      assert.equal(e.defaultPrevented, true);
+      assert.equal(page.els.mode.textContent, 'Split');
+      assert.equal(input.focused, true);
+      assert.equal(input.hidden, false);
+      assert.deepEqual(page.writes(), []);
+    });
+
+    await t.test('a stopped tab', async (t) => {
+      await t.test('does not open', async () => {
+        const page = await runNote(opts());
+        await page.message({ type: 'stop', id: ID, tabId: 7 })[0];
+        page.els.title.dispatch('click');
+        page.els.title.dispatch('keydown', { key: 'Enter' });
+        closed(page.els);
+      });
+
+      await t.test('closes an open input and leaves no way to rename', async () => {
+        const page = await runNote(opts());
+        open(page, 'New');
+        await page.message({ type: 'stop', id: ID, tabId: 7 })[0];
+        closed(page.els);
+        assert.equal(page.els.title.textContent, 'Jira');
+        assert.equal('tabindex' in page.els.title, false);
+        assert.equal('title' in page.els.title, false);
+      });
+    });
   });
 
   await t.test('a failed note save', async (t) => {

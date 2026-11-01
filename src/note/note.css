@@ -43,6 +43,38 @@ body {
   text-overflow: ellipsis;
 }
 
+.header .title[tabindex] {
+  cursor: text;
+}
+
+.header .title-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 1.2em;
+  font-weight: bold;
+}
+
+.header {
+  position: relative;
+}
+
+/* out of flow: moving the panes on open and close would send the mouseup of a
+   click into the editor somewhere else. Above CodeMirror's own z-indexes. */
+.title-hint {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  left: 0;
+  z-index: 10;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.85em;
+  color: var(--color-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+}
+
 .banner {
   display: flex;
   align-items: center;

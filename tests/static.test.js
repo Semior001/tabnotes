@@ -189,6 +189,14 @@ test('the preview rules that only a real layout would show', () => {
   assert.match(css, /\.code-block:hover \.copy,\s*\.code-block \.copy:focus-visible \{\s*opacity: 1;/);
 });
 
+// no fake layout shows this: an in-flow hint moves the panes when it opens and
+// closes, so a click into the editor would land somewhere else
+test('the rename hint sits over the panes', () => {
+  const css = read('src', 'note', 'note.css');
+  assert.match(css, /\.header \{\s*position: relative;/);
+  assert.match(css, /\.title-hint \{\s*position: absolute;/);
+});
+
 // no fake layout shows these: a row must stay one line, and its actions must
 // not shift it, yet stay reachable by keyboard and on touch
 test('the All notes row rules that only a real layout would show', () => {

@@ -11,7 +11,9 @@
   <p id="error" class="message error" hidden>Could not load note</p>
   <main id="page" class="page" hidden>
     <header class="header">
-      <h1 id="title" class="title"></h1>
+      <h1 id="title" class="title" tabindex="0" title="Rename"></h1>
+      <input id="title-input" class="title-input" type="text" aria-label="Note title" hidden>
+      <p id="title-hint" class="title-hint" hidden></p>
       <button id="mode" type="button" title="Cycle split, editor and preview (Ctrl+E)">Split</button>
       <button id="all-notes" type="button">All notes</button>
       <button id="settings" type="button">Settings</button>

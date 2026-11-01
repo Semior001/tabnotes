@@ -27,7 +27,7 @@ import {
   noteIdFromUrl, storageKey, newNote, edit, restore, daysLeftText, createDebouncer, canOpen, previewExtension,
   toggleWrap, linkText, fontSizeFrom, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, imageKey,
   imageIdFromHref, imageHTML, imageMarkdown, imageLabel, checkImageFiles, pasteIsText, themeFrom, isDarkTheme,
-  STORAGE_FULL_HINT, DEFAULT_TITLE, titleVars, expandTitle, type ImageValue,
+  STORAGE_FULL_HINT, DEFAULT_TITLE, TITLE_HINT, titleVars, expandTitle, type ImageValue,
   type Note, type NoteChange, type Pane, type Settings, type StopMessage, type ThemeMode,
 } from '../lib/notes.ts';
 
@@ -40,6 +40,9 @@ declare const mermaid: typeof import('mermaid').default;
   const previewEl = $('preview');
   const modeEl = $('mode');
   const panesEl = $('panes');
+  const titleEl = $('title');
+  const titleInput = $<HTMLInputElement>('title-input');
+  const titleHint = $('title-hint');
   const SAVE_DELAY_MS = 500;
   const PREVIEW_DELAY_MS = 150;
   const COPIED_MS = 1500;
@@ -138,7 +141,8 @@ declare const mermaid: typeof import('mermaid').default;
   const defaultTitle = (stored.settings as Settings | undefined)?.defaultTitle || DEFAULT_TITLE;
   let note: Note = initial || newNote(expandTitle(defaultTitle, titleVars(new Date(), source)) || DEFAULT_TITLE, Date.now());
   document.title = note.title;
-  $('title').textContent = note.title;
+  titleEl.textContent = note.title;
+  titleHint.textContent = TITLE_HINT;
   contentEl.value = note.content;
   // a change that landed during the load is newer than the loaded value
   if (!fontChanged) applyFont(stored.fontSize);
@@ -206,6 +210,16 @@ declare const mermaid: typeof import('mermaid').default;
     extraKeys,
   });
 
+  // the text at open, null when closed. Every close clears it before hiding the
+  // input, so nothing depends on whether Firefox fires blur on a hidden element.
+  let renaming: string | null = null;
+  const closeRename = () => {
+    renaming = null;
+    titleInput.hidden = true;
+    titleHint.hidden = true;
+    titleEl.hidden = false;
+  };
+
   // set once the note is deleted forever elsewhere or All notes stopped this
   // tab before trashing or removing it: from then on nothing is written, or a
   // pending save or flush would resurrect it. The banner says deleted in both
@@ -214,6 +228,9 @@ declare const mermaid: typeof import('mermaid').default;
   const stop = () => {
     stopped = true;
     cm!.setOption('readOnly', 'nocursor');
+    closeRename();
+    titleEl.removeAttribute('tabindex');
+    titleEl.removeAttribute('title');
     $('bin').hidden = true;
     $('deleted').hidden = false;
   };
@@ -552,6 +569,56 @@ declare const mermaid: typeof import('mermaid').default;
     saver.flush();
   });
 
+  const openRename = () => {
+    if (stopped) return;
+    renaming = note.title;
+    titleInput.value = note.title;
+    titleEl.hidden = true;
+    titleInput.hidden = false;
+    titleHint.hidden = false;
+    titleInput.focus();
+    titleInput.select();
+  };
+  // text equal to what was opened is left alone: expanding it again would change
+  // a stored title holding braces, and writing it would revert a rename adopted
+  // while the input was open. The save is flushed as a pending one could be
+  // dropped as older than a restore, or lose the title to another tab's save.
+  const commitRename = () => {
+    if (renaming === null) return;
+    const opened = renaming;
+    closeRename();
+    if (titleInput.value === opened) return;
+    const title = expandTitle(titleInput.value, titleVars(new Date(), source));
+    if (title === '') return;
+    note = { ...note, title };
+    titleEl.textContent = title;
+    document.title = title;
+    saver.schedule();
+    saver.flush();
+  };
+  titleEl.addEventListener('click', openRename);
+  titleEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.repeat) openRename();
+  });
+  titleInput.addEventListener('keydown', (e) => {
+    switch (e.key) {
+      case 'Enter':
+        commitRename();
+        break;
+      case 'Escape':
+        closeRename();
+        break;
+      default:
+        return;
+    }
+    titleEl.focus();
+  });
+  // switching tab or window blurs the input but leaves it active, and a
+  // half-typed title must stay open
+  titleInput.addEventListener('blur', () => {
+    if (document.activeElement !== titleInput) commitRename();
+  });
+
   // All notes sends one stop per tab before it closes the tabs and trashes or
   // removes the note: the reply waits for the flushed write to land and
   // nothing is written after it, so this tab's pagehide cannot resurrect the
@@ -658,7 +725,8 @@ declare const mermaid: typeof import('mermaid').default;
     // editor handled is skipped: on mac Ctrl-E is its emacs line end.
     if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== 'KeyE') return;
     e.preventDefault();
-    cycle();
+    // cycle focuses the editor, which would commit a half-typed title
+    if (document.activeElement !== titleInput) cycle();
   });
 
   // Ctrl+= / Ctrl+- / Ctrl+0 (Shift allowed: + is Shift+= on US layouts).
