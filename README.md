@@ -1,5 +1,10 @@
 # <img src="icons/icon-96.png" alt="" width="40" height="40" align="absmiddle"> tabnotes
 
+[![CI](https://github.com/Semior001/tabnotes/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Semior001/tabnotes/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Semior001/tabnotes?sort=semver)](https://github.com/Semior001/tabnotes/releases/latest)
+[![Firefox 143+](https://img.shields.io/badge/Firefox-143%2B-FF7139?logo=firefoxbrowser&logoColor=white)](https://www.mozilla.org/firefox/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 Markdown notes that live in your Firefox tabs. Click the toolbar button and a note opens as a tab, right next to the page it belongs to. Keep a note under a ticket, a document or a [Sidebery](https://addons.mozilla.org/firefox/addon/sidebery/) group, and it stays there, even after you restart Firefox.
 
 <picture>
