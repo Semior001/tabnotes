@@ -11,7 +11,8 @@
     "allowImportingTsExtensions": true,
     "types": ["firefox-webext-browser"],
     "paths": {
-      "codemirror/lib/codemirror.js": ["./node_modules/@types/codemirror/index.d.ts"]
+      "codemirror/lib/codemirror.js": ["./node_modules/@types/codemirror/index.d.ts"],
+      "pako/lib/inflate.js": ["./node_modules/@types/pako/index.d.ts"]
     }
   },
   "include": ["src"]
