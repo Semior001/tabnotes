@@ -1,6 +1,7 @@
 // Background script: the toolbar button opens a new note tab under the
 // current tab, binned notes past their bin days are purged, images no note
-// references are swept, and temporary notes closed for too long are binned.
+// references are swept, temporary notes closed for too long are binned, and
+// an add-on update waits until no tabnotes page is open.
 
 import {
   noteUrl, notesFromStorage, storageKey, idFromStorageKey, expired, imageKey, sweepImages,
@@ -12,6 +13,8 @@ import {
   const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
   const CLOSE_SWEEP_INTERVAL_MS = 10 * 60 * 1000;
   const noteBase = browser.runtime.getURL('note/note.html');
+  // any tabnotes page, not only notes: the reload closes All notes and Settings too
+  const extensionBase = browser.runtime.getURL('');
 
   const warn = (what: string) => (err: unknown) => console.warn(`tabnotes: ${what}:`, err);
   const warnOr = <T>(what: string, fallback: T) => (err: unknown): T => {
@@ -27,6 +30,13 @@ import {
     const url = noteUrl(noteBase, crypto.randomUUID());
     const props = { url, openerTabId: tab.id, windowId: tab.windowId, index: tab.index + 1 };
     browser.tabs.create(props).catch(warn('open note tab'));
+  });
+
+  let updatePending = false;
+  // registered at once: Firefox holds an update only while a listener exists;
+  // the close sweep tick applies it
+  browser.runtime.onUpdateAvailable.addListener(() => {
+    updatePending = true;
   });
 
   const readNotes = async (what: string, mapKey: string) => {
@@ -120,5 +130,17 @@ import {
   // not at startup: this page starts before session restore, so open tabs
   // would look closed. A sweep during a slow restore can only add an entry,
   // which a later one clears, as binning needs an entry already 30 days old.
-  setInterval(expireClosed, CLOSE_SWEEP_INTERVAL_MS);
+  // The update check runs here, after the sweep, and not from the listener or
+  // tab events: a reload then could cut off a sweep in flight, or a closing
+  // tab's pagehide write, which is not ordered against the close. The first
+  // tick comes 10 minutes after start, once session restore has added its tabs.
+  setInterval(async () => {
+    await expireClosed();
+    if (!updatePending) return;
+    const tabs = await browser.tabs.query({}).catch(warnOr('list tabs for update', null));
+    // no tab list: a reload could close open tabs, so wait for the next tick
+    if (tabs === null) return;
+    if (tabs.some((tab) => tab.url?.startsWith(extensionBase))) return;
+    browser.runtime.reload();
+  }, CLOSE_SWEEP_INTERVAL_MS);
 })();

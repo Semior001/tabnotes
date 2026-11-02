@@ -22,13 +22,14 @@ const settle = () => new Promise((r) => setImmediate(r));
 // browser stub, a fixed clock and recorded (never real) timers so node --test
 // can exit. onRead runs after each get has taken its snapshot, so a test can
 // land a write the script has not seen, and after each tabs.query too. tabs is
-// what tabs.query returns, read at call time, and a function in reject decides
-// by the call's arguments.
+// what tabs.query returns, read at call time (a test closes a tab by splicing
+// it), and a function in reject decides by the call's arguments.
 async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tabs = [] } = {}) {
   const warnings = [];
   const calls = [];
   const intervals = [];
   const clicks = [];
+  const updates = [];
   let now = NOW;
   // call records a browser API call and rejects when the test asked it to;
   // args are cloned into this realm so deepStrictEqual compares prototypes
@@ -45,7 +46,13 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tab
     setTimeout: () => assert.fail('setTimeout must not be used'),
     crypto: { randomUUID: () => ID },
     browser: {
-      runtime: { getURL: (p) => `moz-extension://uuid/${p}` },
+      runtime: {
+        getURL: (p) => `moz-extension://uuid/${p}`,
+        onUpdateAvailable: { addListener: (fn) => updates.push(fn) },
+        reload: () => {
+          calls.push(['runtime.reload']);
+        },
+      },
       browserAction: { onClicked: { addListener: (fn) => clicks.push(fn) } },
       tabs: {
         create: (props) => call('tabs.create', props),
@@ -81,22 +88,30 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tab
     },
   });
   script.runInContext(ctx);
+  // counted before any await, so a listener added after one fails the test
+  const updateListenersAtEval = updates.length;
   await settle();
   const click = async (tab) => {
     for (const fn of clicks) fn(tab);
     await settle();
   };
+  // fireUpdate delivers runtime.onUpdateAvailable
+  const fireUpdate = async () => {
+    for (const fn of updates) fn();
+    await settle();
+  };
   const of = (name) => calls.filter(([n]) => n === name);
-  // fire runs the interval of the given delay with the clock at the given time
+  // fire runs the interval of the given delay with the clock at the given
+  // time and awaits it, so a rejected callback fails the test
   const fire = async (delay, time) => {
     now = time;
-    intervals.find((i) => i.delay === delay).fn();
+    await intervals.find((i) => i.delay === delay).fn();
     await settle();
   };
   // sweepAt runs the 24h purge, closeSweepAt the 10-minute close sweep
   const sweepAt = (time) => fire(DAY_MS, time);
   const closeSweepAt = (time) => fire(CLOSE_SWEEP_MS, time);
-  return { warnings, calls, intervals, click, of, sweepAt, closeSweepAt };
+  return { warnings, calls, intervals, updateListenersAtEval, click, fireUpdate, of, sweepAt, closeSweepAt };
 }
 
 const note = (deletedAt) => ({ title: 'Notes', content: 'x', updatedAt: 1, deletedAt });
@@ -762,5 +777,121 @@ test('close sweep', async (t) => {
       await closeSweepAt(NOW);
       assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: save closed notes:']);
     });
+  });
+});
+
+test('update deferral', async (t) => {
+  const page = (path) => ({ id: 1, url: `moz-extension://uuid/${path}` });
+  const reloads = (of) => of('runtime.reload').length;
+
+  await t.test('the listener is registered when the bundle is evaluated', async () => {
+    const { updateListenersAtEval } = await runBackground();
+    assert.equal(updateListenersAtEval, 1);
+  });
+
+  await t.test('an update makes no call and does not reload until the next tick', async () => {
+    const { fireUpdate, closeSweepAt, calls, warnings } = await runBackground();
+    await closeSweepAt(NOW);
+    calls.length = 0;
+    await fireUpdate();
+    assert.deepEqual(calls, []);
+    await closeSweepAt(NOW + CLOSE_SWEEP_MS);
+    assert.deepEqual(calls.slice(-2), [['tabs.query', {}], ['runtime.reload']]);
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('tabs of other sites and other add-ons do not hold it', async () => {
+    const tabs = [
+      { id: 1, url: 'https://a/' }, { id: 2 }, { id: 3, url: 'about:blank' },
+      { id: 4, url: 'moz-extension://other/page.html' },
+      { id: 5, url: `moz-extension://uuid2/note/note.html?id=${ID}` },
+    ];
+    const { fireUpdate, closeSweepAt, of } = await runBackground({ tabs });
+    await fireUpdate();
+    await closeSweepAt(NOW);
+    assert.equal(reloads(of), 1);
+  });
+
+  for (const [name, path] of [
+    ['a note tab', `note/note.html?id=${ID}`],
+    ['an All notes tab', 'recovery/recovery.html'],
+    ['a Settings tab', 'options/options.html'],
+  ]) {
+    await t.test(`${name} holds it until the tick after it is gone`, async () => {
+      const tabs = [{ id: 9, url: 'https://a/' }, page(path)];
+      const { fireUpdate, closeSweepAt, of } = await runBackground({ tabs });
+      await fireUpdate();
+      await closeSweepAt(NOW);
+      assert.equal(reloads(of), 0);
+      await closeSweepAt(NOW + CLOSE_SWEEP_MS);
+      assert.equal(reloads(of), 0);
+      tabs.splice(1, 1);
+      await closeSweepAt(NOW + 2 * CLOSE_SWEEP_MS);
+      assert.equal(reloads(of), 1);
+    });
+  }
+
+  await t.test('an update at startup waits for the first tick, which a restored note tab holds', async () => {
+    const tabs = [page(`note/note.html?id=${ID}`)];
+    const { fireUpdate, closeSweepAt, calls, of } = await runBackground({ tabs });
+    calls.length = 0;
+    await fireUpdate();
+    assert.deepEqual(calls, []);
+    await closeSweepAt(NOW);
+    assert.equal(reloads(of), 0);
+  });
+
+  await t.test('ticks with no pending update query no tabs for it and do not reload', async () => {
+    const { closeSweepAt, calls, of } = await runBackground();
+    calls.length = 0;
+    await closeSweepAt(NOW);
+    await closeSweepAt(NOW + CLOSE_SWEEP_MS);
+    assert.deepEqual(calls.map(([name]) => name), [
+      'storage.local.getKeys', 'storage.local.get', 'tabs.query',
+      'storage.local.getKeys', 'storage.local.get', 'tabs.query',
+    ]);
+    assert.equal(reloads(of), 0);
+  });
+
+  await t.test('a tick runs the close sweep writes before the update check', async () => {
+    const storage = {
+      [`note:${ID}`]: { title: 'Notes', content: 'x', updatedAt: 1, deletedAt: null, temporary: true },
+      closedNotes: { [ID]: NOW - 30 * DAY_MS },
+    };
+    const { fireUpdate, closeSweepAt, calls } = await runBackground({ storage });
+    await fireUpdate();
+    calls.length = 0;
+    await closeSweepAt(NOW);
+    assert.deepEqual(calls.map(([name]) => name), [
+      'storage.local.getKeys', 'storage.local.get', 'tabs.query',
+      'storage.local.get', 'tabs.query',
+      'storage.local.set', 'storage.local.set',
+      'tabs.query', 'runtime.reload',
+    ]);
+    assert.equal(storage[`note:${ID}`].binDays, 7);
+  });
+
+  await t.test('a failed close sweep still runs the update check', async () => {
+    const { fireUpdate, closeSweepAt, of, warnings } = await runBackground({ reject: { 'storage.local.getKeys': true } });
+    await fireUpdate();
+    await closeSweepAt(NOW);
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: list keys for purge:', 'tabnotes: list keys for close sweep:']);
+    assert.equal(reloads(of), 1);
+  });
+
+  await t.test('a rejected query on a tick is logged and does not reload, and the next tick reloads', async () => {
+    const reject = {};
+    const { fireUpdate, closeSweepAt, of, warnings } = await runBackground({ reject });
+    await fireUpdate();
+    let seen = 0;
+    // the first query is the close sweep's, the second the update check's
+    reject['tabs.query'] = () => ++seen === 2;
+    await closeSweepAt(NOW);
+    // pins the order the reject above relies on
+    assert.equal(of('tabs.query').length, 2);
+    assert.equal(reloads(of), 0);
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: list tabs for update:']);
+    await closeSweepAt(NOW + CLOSE_SWEEP_MS);
+    assert.equal(reloads(of), 1);
   });
 });
