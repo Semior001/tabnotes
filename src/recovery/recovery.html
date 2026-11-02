@@ -15,6 +15,9 @@
       <input id="search" class="search" type="search" placeholder="Search notes" aria-label="Search notes" autofocus>
       <button id="new-permanent" type="button">New permanent note</button>
       <button id="new-temporary" type="button">New temporary note</button>
+      <button id="export-all" type="button">Export all</button>
+      <button id="import-notes" type="button">Import...</button>
+      <input id="import-file" type="file" accept=".zip,.md" multiple hidden>
       <button id="settings" type="button">Settings</button>
     </header>
     <div id="bar" class="header" role="toolbar" aria-label="Selected notes" hidden>
@@ -24,6 +27,7 @@
       <button id="bar-move" type="button">Move to Bin</button>
       <button id="bar-restore" type="button">Restore</button>
       <button id="bar-delete" type="button">Delete forever</button>
+      <button id="bar-export" type="button">Export</button>
       <button id="bar-clear" type="button">Clear</button>
     </div>
     <p id="status" class="status" role="status" hidden>

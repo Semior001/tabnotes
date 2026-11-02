@@ -9,10 +9,14 @@ const {
   newNote, edit, rename, trash, restore, daysLeft, daysLeftText, expired, classify, matches, escapeHTML, plainPreview, rowText, searchParts, selectRange, shortDate, DEFAULT_TITLE,
   codeBlockHTML, previewExtension, taskOffsets, toggleTask, previewBlocks, scrollMap, scrollAnchors, toggleWrap, linkText, fontSizeFrom, themeFrom, isDarkTheme,
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
+  referencedImages, storedImageIds, countText,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameFirstSeen,
   titleVars, expandTitle, TITLE_HINT, KIND_HINT,
   setTemporary, trashClosed, temporaryFromUrl, sweepClosed, stillDue, closedAfterFailedWrite, closedDaysLeft, closedDaysLeftText,
-} = require('../src/lib/notes.ts');
+  noteFile, parseNoteFile, fileNames,
+  imageExt, imageFromPath, zipPath, exportLinks, importLinks, dataUrlBytes, bytesDataUrl,
+  MAX_NOTE_BYTES, MAX_IMPORT_BYTES, mdNote, importedNote, planImport, importSummary, exportSummary, zipFits, MAX_ZIP_ENTRIES,
+} =require('../src/lib/notes.ts');
 
 test('canOpen', async (t) => {
   const cases = [
@@ -1041,6 +1045,25 @@ test('imageMarkdown', async (t) => {
   });
 });
 
+test('referencedImages', () => {
+  const note = (content) => ({ title: 'T', content, updatedAt: 1, deletedAt: null });
+  const got = referencedImages([note(imageMarkdown('a', IMG_A)), note(`${imageMarkdown('b', IMG_B)} ${imageMarkdown('c', IMG_A)}`), note('x')]);
+  assert.deepEqual(got, new Set([IMG_A, IMG_B]));
+  assert.deepEqual(referencedImages([]), new Set());
+});
+
+test('storedImageIds', () => {
+  const keys = [imageKey(IMG_A), `note:${IMG_B}`, 'image:abc', 'settings', imageKey(IMG_B), `image:${IMG_A}x`];
+  assert.deepEqual(storedImageIds(keys), new Set([IMG_A, IMG_B]));
+});
+
+test('countText', async (t) => {
+  const cases = [[0, '0 notes'], [1, '1 note'], [2, '2 notes']];
+  for (const [n, want] of cases) {
+    await t.test(want, () => assert.equal(countText(n, 'note'), want));
+  }
+});
+
 test('imageRefs', async (t) => {
   await t.test('no references', () => {
     assert.deepEqual(imageRefs('plain ![x](http://a.com/b.png)'), new Set());
@@ -1651,4 +1674,688 @@ test('closedDaysLeft', async (t) => {
     assert.equal(closedDaysLeftText(now - 29 * DAY, note, now), '1 day left');
     assert.equal(closedDaysLeftText(now - 30 * DAY, note, now), '0 days left');
   });
+});
+
+const utf8 = (s) => new TextEncoder().encode(s);
+
+test('noteFile', async (t) => {
+  const live = { title: 'Shopping list', content: '- milk\n', updatedAt: 1793568000000, deletedAt: null };
+  const notes = [
+    ['live', live],
+    ['temporary', { ...live, temporary: true }],
+    ['restored', { ...live, restoredAt: 1793568000005 }],
+    ['temporary restored', { ...live, temporary: true, restoredAt: 1793568000005 }],
+    ['binned', { ...live, deletedAt: 1793568000009 }],
+    ['binned temporary with binDays', { ...live, deletedAt: 1793568000009, temporary: true, binDays: 7 }],
+    ['binned after a restore', { ...live, deletedAt: 1793568000009, restoredAt: 1793568000005, binDays: 30 }],
+    ['binned blank', { ...live, content: '', deletedAt: 1793568000009 }],
+  ];
+  for (const [name, note] of notes) {
+    await t.test(`round trip: ${name}`, () => {
+      assert.deepEqual(parseNoteFile(utf8(noteFile(ID1, note, note.content))), { id: ID1, note });
+    });
+  }
+
+  await t.test('stable bytes whatever the key order of the note', () => {
+    const a = { restoredAt: 5, temporary: true, deletedAt: null, updatedAt: 3, content: 'x', title: 't' };
+    const b = { title: 't', content: 'x', updatedAt: 3, deletedAt: null, temporary: true, restoredAt: 5 };
+    assert.equal(noteFile(ID1, a, 'x'), noteFile(ID1, b, 'x'));
+    assert.equal(noteFile(ID1, a, 'x'), noteFile(ID1, a, 'x'));
+  });
+
+  await t.test('content is passed in, not taken from the note', () => {
+    assert.equal(parseNoteFile(utf8(noteFile(ID1, live, 'other'))).note.content, 'other');
+  });
+
+  for (const [name, title] of [
+    ['quotes', 'say "hi" \'there\''],
+    ['newlines', 'one\ntwo\r\nthree'],
+    ['delimiter', '---'],
+    ['unicode', 'Заметки 📝 ノート'],
+    ['backslash', 'a\\b'],
+  ]) {
+    await t.test(`title with ${name}`, () => {
+      const note = { ...live, title };
+      assert.deepEqual(parseNoteFile(utf8(noteFile(ID1, note, note.content))), { id: ID1, note });
+    });
+  }
+
+  for (const [name, content] of [
+    ['a --- line', 'above\n---\nbelow\n'],
+    ['a front matter of its own', `---\nid: "${ID2}"\n---\n`],
+    ['CRLF', 'one\r\ntwo\r\n'],
+    ['no trailing newline', 'last line'],
+    ['leading blank lines', '\n\ntext'],
+  ]) {
+    await t.test(`content with ${name} kept byte for byte`, () => {
+      const note = { ...live, content };
+      assert.deepEqual(parseNoteFile(utf8(noteFile(ID1, note, content))), { id: ID1, note });
+    });
+  }
+
+  await t.test('fixed text, readable as YAML', () => {
+    const note = { ...live, content: '![photo](../images/x.png)\n', deletedAt: 1793568000009, temporary: true, binDays: 7, restoredAt: 1793568000005 };
+    assert.equal(noteFile(ID1, note, note.content), [
+      '---',
+      `id: "${ID1}"`,
+      'title: "Shopping list"',
+      'updatedAt: 1793568000000',
+      'deletedAt: 1793568000009',
+      'temporary: true',
+      'binDays: 7',
+      'restoredAt: 1793568000005',
+      '---',
+      '![photo](../images/x.png)',
+      '',
+    ].join('\n'));
+    assert.equal(noteFile(ID1, live, live.content), [
+      '---',
+      `id: "${ID1}"`,
+      'title: "Shopping list"',
+      'updatedAt: 1793568000000',
+      'deletedAt: null',
+      '---',
+      '- milk',
+      '',
+    ].join('\n'));
+  });
+});
+
+test('parseNoteFile', async (t) => {
+  const head = (lines) => ['---', ...lines, '---', ''].join('\n');
+  const required = [`id: "${ID1}"`, 'title: "T"', 'updatedAt: 10', 'deletedAt: null'];
+  const without = (key) => required.filter((l) => !l.startsWith(key + ':'));
+  const binned = [...without('deletedAt'), 'deletedAt: 5'];
+  const live = { title: 'T', content: 'body\n', updatedAt: 10, deletedAt: null };
+
+  await t.test('CRLF delimiters and key lines', () => {
+    const text = ['---', ...required, '---', 'body\r\n'].join('\r\n');
+    assert.deepEqual(parseNoteFile(utf8(text)), { id: ID1, note: { ...live, content: 'body\r\n' } });
+  });
+
+  await t.test('key order is free', () => {
+    assert.deepEqual(parseNoteFile(utf8(head([...required].reverse()) + 'body\n')), { id: ID1, note: live });
+  });
+
+  await t.test('closing delimiter at the end of the file', () => {
+    const text = ['---', ...binned, '---'].join('\n');
+    assert.deepEqual(parseNoteFile(utf8(text)), { id: ID1, note: { ...live, content: '', deletedAt: 5 } });
+  });
+
+  await t.test('blank content in a binned note', () => {
+    assert.deepEqual(parseNoteFile(utf8(head(binned))), { id: ID1, note: { ...live, content: '', deletedAt: 5 } });
+  });
+
+  const plain = [
+    ['plain text', '# Title\n\nbody\n'],
+    ['empty', ''],
+    ['delimiter not on the first line', '\n' + head(required) + 'body\n'],
+    ['Obsidian front matter', head(['tags: [a, b]', 'aliases:', '  - x']) + 'body\n'],
+    ['Hugo front matter with a title', head(['title: "Post"', 'date: 2026-01-01']) + 'body\n'],
+    ['id missing', head(without('id')) + 'body\n'],
+    ['id not a valid id', head(['id: "abc"', ...without('id')]) + 'body\n'],
+    ['id not a string', head(['id: 5', ...without('id')]) + 'body\n'],
+    ['a thematic break first and no closing ---', '---\n# Title\nbody\n'],
+    ['no closing --- with an id line in the body', `---\n# Title\nid: "${ID1}"\nbody\n`],
+    ['no closing --- after a whole front matter', ['---', ...required, 'body'].join('\n')],
+    ['leading BOM', '﻿' + head(required) + 'body\n'],
+  ];
+  for (const [name, text] of plain) {
+    await t.test(`plain: ${name}`, () => assert.equal(parseNoteFile(utf8(text)), 'plain'));
+  }
+
+  const bad = [
+    ['id unquoted, as Obsidian writes it', head([`id: ${ID1}`, ...without('id')]) + 'body\n'],
+    ['id in single quotes', head([`id: '${ID1}'`, ...without('id')]) + 'body\n'],
+    ['plain YAML values beside a JSON id', head([`id: "${ID1}"`, 'title: Shopping list', 'updatedAt: 10', 'deletedAt: null']) + 'body\n'],
+    ['unknown key', head([...required, 'tags: []']) + 'body'],
+    ['repeated key', head([...required, 'title: "U"']) + 'body'],
+    ['repeated id', head([...required, `id: "${ID1}"`]) + 'body'],
+    ['missing title', head(without('title')) + 'body'],
+    ['missing updatedAt', head(without('updatedAt')) + 'body'],
+    ['missing deletedAt', head(without('deletedAt')) + 'body'],
+    ['title not a string', head([...without('title'), 'title: 5']) + 'body'],
+    ['updatedAt a string', head([...without('updatedAt'), 'updatedAt: "10"']) + 'body'],
+    ['deletedAt false', head([...without('deletedAt'), 'deletedAt: false']) + 'body'],
+    ['temporary false', head([...required, 'temporary: false']) + 'body'],
+    ['temporary a string', head([...required, 'temporary: "true"']) + 'body'],
+    ['binDays 0', head([...binned, 'binDays: 0']) + 'body'],
+    ['binDays negative', head([...binned, 'binDays: -7']) + 'body'],
+    ['binDays fractional', head([...binned, 'binDays: 1.5']) + 'body'],
+    ['binDays with deletedAt null', head([...required, 'binDays: 7']) + 'body'],
+    ['unsafe integer', head([...without('updatedAt'), 'updatedAt: 9007199254740993']) + 'body'],
+    ['fractional time', head([...without('updatedAt'), 'updatedAt: 10.5']) + 'body'],
+    ['negative time', head([...without('updatedAt'), 'updatedAt: -1']) + 'body'],
+    ['negative restoredAt', head([...required, 'restoredAt: -1']) + 'body'],
+    ['non-JSON value', head([...without('title'), 'title: plain words']) + 'body'],
+    ['line without a key', head([...required, 'just text']) + 'body'],
+    ['blank line in the block', head([...required, '']) + 'body'],
+    ['blank live content', head(required) + ' \n\t\n'],
+    ['empty live content', head(required)],
+  ];
+  for (const [name, text] of bad) {
+    await t.test(`null: ${name}`, () => assert.equal(parseNoteFile(utf8(text)), null));
+  }
+
+  await t.test('null: invalid UTF-8', () => {
+    const bytes = utf8(head(required) + 'body');
+    assert.equal(parseNoteFile(new Uint8Array([...bytes, 0xff, 0xfe])), null);
+  });
+});
+
+test('fileNames', async (t) => {
+  const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const note = (title, extra = {}) => ({ title, content: 'body', updatedAt: 1, deletedAt: null, ...extra });
+  const one = (title, content = 'body') => fileNames({ [id(1)]: note(title, { content }) }, 'Default')[id(1)];
+
+  await t.test('title used, in its folder', () => {
+    const got = fileNames({
+      [id(1)]: note('Shopping list'),
+      [id(2)]: note('Draft', { temporary: true }),
+      [id(3)]: note('Old', { deletedAt: 5 }),
+      [id(4)]: note('Scratch', { deletedAt: 5, temporary: true, binDays: 7 }),
+    }, 'Default');
+    assert.deepEqual(got, {
+      [id(1)]: 'permanent/Shopping list.md',
+      [id(2)]: 'temporary/Draft.md',
+      [id(3)]: 'bin/Old.md',
+      [id(4)]: 'bin/Scratch.md',
+    });
+  });
+
+  await t.test('default title named by content', () => {
+    assert.equal(one(DEFAULT_TITLE, '# Plan\n\ntext'), 'permanent/Plan.md');
+    assert.equal(one('Default', 'first line\nsecond'), 'permanent/first line.md');
+  });
+
+  for (const ch of ['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\x00', '\x01', '\t', '\x1f', '\x7f', '\x85']) {
+    await t.test(`replaces ${JSON.stringify(ch)}`, () => assert.equal(one(`a${ch}b`), 'permanent/a-b.md'));
+  }
+
+  await t.test('trims leading and trailing dots and spaces', () => {
+    assert.equal(one(' . .a.b. . '), 'permanent/a.b.md');
+    assert.equal(one('..'), 'permanent/note.md');
+  });
+
+  const reserved = [
+    ['con', 'con_'], ['CON', 'CON_'], ['Con.txt', 'Con_.txt'], ['lpt1.x.y', 'lpt1_.x.y'],
+    ['nul', 'nul_'], ['Aux', 'Aux_'], ['prn', 'prn_'], ['com9', 'com9_'], ['COM1', 'COM1_'],
+    ['console', 'console'], ['com0', 'com0'], ['lpt10', 'lpt10'], ['auxiliary.txt', 'auxiliary.txt'], ['a.con', 'a.con'],
+  ];
+  for (const [title, want] of reserved) {
+    await t.test(`reserved stem ${title}`, () => assert.equal(one(title), `permanent/${want}.md`));
+  }
+
+  await t.test('NFC normalization', () => {
+    assert.equal(one('Café'), 'permanent/Café.md');
+  });
+
+  const cut = [
+    ['ASCII at 100 UTF-16 units', 'a'.repeat(300), 'a'.repeat(100)],
+    ['Cyrillic at 100 UTF-16 units', 'я'.repeat(150), 'я'.repeat(100)],
+    ['CJK at 200 bytes', '漢'.repeat(100), '漢'.repeat(66)],
+    ['emoji', '\u{1F600}'.repeat(60), '\u{1F600}'.repeat(50)],
+    ['emoji off the boundary', 'a' + '\u{1F600}'.repeat(60), 'a' + '\u{1F600}'.repeat(49)],
+    ['trailing space after the cut', 'a'.repeat(99) + ' b', 'a'.repeat(99)],
+  ];
+  for (const [name, title, want] of cut) {
+    await t.test(`cut: ${name}`, () => assert.equal(one(title), `permanent/${want}.md`));
+  }
+
+  await t.test('empty result is note', () => {
+    assert.equal(one('   '), 'permanent/note.md');
+    assert.equal(one('. .'), 'permanent/note.md');
+  });
+
+  await t.test('duplicates suffixed case-insensitively within a folder', () => {
+    const got = fileNames({
+      [id(1)]: note('Plan', { updatedAt: 3 }),
+      [id(2)]: note('plan', { updatedAt: 2 }),
+      [id(3)]: note('PLAN', { updatedAt: 1 }),
+      [id(4)]: note('Plan', { updatedAt: 3, temporary: true }),
+      [id(5)]: note('Plan', { updatedAt: 3, deletedAt: 5 }),
+    }, 'Default');
+    assert.deepEqual(got, {
+      [id(1)]: 'permanent/Plan.md',
+      [id(2)]: 'permanent/plan (2).md',
+      [id(3)]: 'permanent/PLAN (3).md',
+      [id(4)]: 'temporary/Plan.md',
+      [id(5)]: 'bin/Plan.md',
+    });
+  });
+
+  await t.test('a suffix skips a name already taken', () => {
+    const got = fileNames({
+      [id(1)]: note('a', { updatedAt: 3 }),
+      [id(2)]: note('a (2)', { updatedAt: 2 }),
+      [id(3)]: note('a', { updatedAt: 1 }),
+    }, 'Default');
+    assert.deepEqual(got, {
+      [id(1)]: 'permanent/a.md',
+      [id(2)]: 'permanent/a (2).md',
+      [id(3)]: 'permanent/a (3).md',
+    });
+  });
+
+  await t.test('newest first, then id', () => {
+    const got = fileNames({
+      [id(3)]: note('x', { updatedAt: 1 }),
+      [id(2)]: note('x', { updatedAt: 5 }),
+      [id(1)]: note('x', { updatedAt: 1 }),
+    }, 'Default');
+    assert.deepEqual(got, {
+      [id(2)]: 'permanent/x.md',
+      [id(1)]: 'permanent/x (2).md',
+      [id(3)]: 'permanent/x (3).md',
+    });
+  });
+
+  await t.test('same output regardless of key order', () => {
+    const entries = [1, 2, 3, 4, 5].map((n) => [id(n), note(n % 2 ? 'Same' : 'same', { updatedAt: n % 3 })]);
+    const a = fileNames(Object.fromEntries(entries), 'Default');
+    const b = fileNames(Object.fromEntries([...entries].reverse()), 'Default');
+    assert.deepEqual(a, b);
+  });
+});
+
+test('imageExt', async (t) => {
+  const cases = [
+    ['jpeg alias', 'image/jpeg', 'jpg'],
+    ['svg alias', 'image/svg+xml', 'svg'],
+    ['icon alias', 'image/x-icon', 'ico'],
+    ['png', 'image/png', 'png'],
+    ['tiff', 'image/tiff', 'tiff'],
+    ['heic', 'image/heic', 'heic'],
+    ['dotted subtype', 'image/vnd.microsoft.icon', 'vnd.microsoft.icon'],
+    ['not an image', 'text/plain', null],
+    ['no subtype', 'image/', null],
+    ['parameter', 'image/png; q=1', null],
+    ['slash in subtype', 'image/png/x', null],
+    ['upper case', 'image/PNG', null],
+    ['leading dot', 'image/..', null],
+    ['empty', '', null],
+  ];
+  for (const [name, mime, want] of cases) {
+    await t.test(name, () => assert.equal(imageExt(mime), want));
+  }
+});
+
+test('zipPath', async (t) => {
+  const cases = [
+    ['note', 'a.md', { kind: 'note', name: 'a.md' }],
+    ['nested note', 'permanent/My Note.MD', { kind: 'note', name: 'permanent/My Note.MD' }],
+    ['image', `images/${IMG_A}.png`, { kind: 'image', name: `images/${IMG_A}.png`, id: IMG_A, mime: 'image/png' }],
+    ['image under a folder', `backup/images/${IMG_A}.jpg`,
+      { kind: 'image', name: `backup/images/${IMG_A}.jpg`, id: IMG_A, mime: 'image/jpeg' }],
+    ['image named .md', `images/${IMG_A}.md`, { kind: 'image', name: `images/${IMG_A}.md`, id: IMG_A, mime: 'image/md' }],
+    ['bsdtar ./', './a.md', { kind: 'note', name: 'a.md' }],
+    ['repeated ./', './././images/x.md', { kind: 'note', name: 'images/x.md' }],
+    ['./ only once at the start', 'a/./b.md', { kind: 'unsupported', name: 'a/./b.md' }],
+    ['directory', 'permanent/', { kind: 'skip', name: 'permanent/' }],
+    ['./ directory', './', { kind: 'skip', name: '' }],
+    ['macOS folder', '__MACOSX/permanent/._a.md', { kind: 'skip', name: '__MACOSX/permanent/._a.md' }],
+    ['macOS metadata', 'permanent/._a.md', { kind: 'skip', name: 'permanent/._a.md' }],
+    ['macOS metadata at the top', './._a.md', { kind: 'skip', name: '._a.md' }],
+    ['dot file that is no metadata', '.a.md', { kind: 'note', name: '.a.md' }],
+    ['other type', 'a.txt', { kind: 'unsupported', name: 'a.txt' }],
+    ['traversal', '../a.md', { kind: 'unsupported', name: '../a.md' }],
+    ['./ then traversal', './../a.md', { kind: 'unsupported', name: '../a.md' }],
+    ['absolute', '/a.md', { kind: 'unsupported', name: '/a.md' }],
+    ['./ then absolute', './/a.md', { kind: 'unsupported', name: '/a.md' }],
+    ['empty segment', 'a//b.md', { kind: 'unsupported', name: 'a//b.md' }],
+    ['Compress-Archive \\', 'permanent\\My Note.md', { kind: 'note', name: 'permanent/My Note.md' }],
+    ['Compress-Archive \\ image', `x\\images\\${IMG_A}.png`,
+      { kind: 'image', name: `x/images/${IMG_A}.png`, id: IMG_A, mime: 'image/png' }],
+    ['\\ directory', 'permanent\\', { kind: 'skip', name: 'permanent/' }],
+    ['.\\', '.\\a.md', { kind: 'note', name: 'a.md' }],
+    ['\\ traversal', '..\\a.md', { kind: 'unsupported', name: '../a.md' }],
+    ['\\ absolute', '\\a.md', { kind: 'unsupported', name: '/a.md' }],
+    ['\\ empty segment', 'a\\\\b.md', { kind: 'unsupported', name: 'a//b.md' }],
+    ['traversing image', `x/../images/${IMG_A}.png`, { kind: 'unsupported', name: `x/../images/${IMG_A}.png` }],
+  ];
+  for (const [name, path, want] of cases) {
+    await t.test(name, () => assert.deepEqual(zipPath(path), want));
+  }
+});
+
+test('imageFromPath', async (t) => {
+  const cases = [
+    ['png', `images/${IMG_A}.png`, { id: IMG_A, mime: 'image/png' }],
+    ['jpg alias', `images/${IMG_A}.jpg`, { id: IMG_A, mime: 'image/jpeg' }],
+    ['jpeg as is', `images/${IMG_A}.jpeg`, { id: IMG_A, mime: 'image/jpeg' }],
+    ['svg alias', `images/${IMG_A}.svg`, { id: IMG_A, mime: 'image/svg+xml' }],
+    ['ico alias', `images/${IMG_A}.ico`, { id: IMG_A, mime: 'image/x-icon' }],
+    ['tiff', `images/${IMG_A}.tiff`, { id: IMG_A, mime: 'image/tiff' }],
+    ['dotted ext', `images/${IMG_A}.vnd.microsoft.icon`, { id: IMG_A, mime: 'image/vnd.microsoft.icon' }],
+    ['no ext', `images/${IMG_A}`, null],
+    ['empty ext', `images/${IMG_A}.`, null],
+    ['bad ext', `images/${IMG_A}.p g`, null],
+    ['upper case ext', `images/${IMG_A}.PNG`, null],
+    ['invalid id', 'images/not-a-valid-id-not-a-valid-id-xxxx.png', null],
+    ['short id', 'images/1234.png', null],
+    ['nested', `images/sub/${IMG_A}.png`, null],
+    ['outside images', `${IMG_A}.png`, null],
+    ['other folder', `permanent/${IMG_A}.png`, null],
+    ['leading folder', `x/images/${IMG_A}.png`, null],
+    ['traversal', `images/../../${IMG_A}.png`, null],
+    ['traversal after ext', `images/${IMG_A}.png/../../x.png`, null],
+    ['absolute', `/images/${IMG_A}.png`, null],
+    ['backslash', `images\\${IMG_A}.png`, null],
+  ];
+  for (const [name, path, want] of cases) {
+    await t.test(name, () => assert.deepEqual(imageFromPath(path), want));
+  }
+
+  await t.test('inverse of imageExt', () => {
+    for (const mime of ['image/png', 'image/jpeg', 'image/svg+xml', 'image/x-icon', 'image/tiff', 'image/heic', 'image/webp']) {
+      assert.deepEqual(imageFromPath(`images/${IMG_B}.${imageExt(mime)}`), { id: IMG_B, mime });
+    }
+  });
+});
+
+test('exportLinks and importLinks', async (t) => {
+  const ref = (id) => `tabnotes-image:${id}`;
+
+  await t.test('exportLinks rewrites only ids in the map', () => {
+    const c = `![a](${ref(IMG_A)}) ![b](${ref(IMG_B)}) ![c](${ref(IMG_C)})`;
+    assert.equal(
+      exportLinks(c, { [IMG_A]: 'png', [IMG_C]: 'jpg' }),
+      `![a](../images/${IMG_A}.png) ![b](${ref(IMG_B)}) ![c](../images/${IMG_C}.jpg)`,
+    );
+  });
+
+  await t.test('exportLinks leaves a reference-style definition', () => {
+    const c = `![a][x]\n\n[x]: ${ref(IMG_A)}\n`;
+    assert.equal(exportLinks(c, { [IMG_A]: 'png' }), c);
+  });
+
+  await t.test('importLinks reverses valid paths only', () => {
+    const c = [
+      `![a](../images/${IMG_A}.png)`,
+      `![b](../images/${IMG_B}.svg)`,
+      '![c](../images/not-a-valid-id-not-a-valid-id-xxxx.png)',
+      `![d](../images/${IMG_C}.PNG)`,
+      `![e](../images/${IMG_C})`,
+      `![f](images/${IMG_C}.png)`,
+    ].join('\n');
+    assert.equal(importLinks(c), [
+      `![a](${ref(IMG_A)})`,
+      `![b](${ref(IMG_B)})`,
+      '![c](../images/not-a-valid-id-not-a-valid-id-xxxx.png)',
+      `![d](../images/${IMG_C}.PNG)`,
+      `![e](../images/${IMG_C})`,
+      `![f](images/${IMG_C}.png)`,
+    ].join('\n'));
+  });
+
+  await t.test('round trip', () => {
+    const c = [
+      '# Note',
+      `![one](${ref(IMG_A)}) and again ![one again](${ref(IMG_A)})`,
+      `![two](${ref(IMG_B)})`,
+      '```',
+      `![in code](${ref(IMG_B)})`,
+      '```',
+      '![ref][r]',
+      '',
+      `[r]: ${ref(IMG_A)}`,
+      `![missing](${ref(IMG_C)})`,
+    ].join('\n');
+    const out = exportLinks(c, { [IMG_A]: 'png', [IMG_B]: 'svg' });
+    assert.ok(out.includes(`(../images/${IMG_B}.svg)`));
+    assert.ok(out.includes(`(${ref(IMG_C)})`));
+    assert.equal(importLinks(out), c);
+  });
+});
+
+test('dataUrlBytes and bytesDataUrl', async (t) => {
+  await t.test('decodes a base64 data URL', () => {
+    assert.deepEqual(dataUrlBytes('data:image/png;base64,AAH/'), { mime: 'image/png', bytes: new Uint8Array([0, 1, 255]) });
+  });
+
+  await t.test('keeps parameters out of the mime', () => {
+    assert.deepEqual(dataUrlBytes('data:image/svg+xml;charset=utf-8;base64,PHN2Zz4='), {
+      mime: 'image/svg+xml', bytes: new TextEncoder().encode('<svg>'),
+    });
+  });
+
+  await t.test('empty payload', () => {
+    assert.deepEqual(dataUrlBytes('data:image/png;base64,'), { mime: 'image/png', bytes: new Uint8Array() });
+  });
+
+  const bad = [
+    ['not a data URL', 'https://a.com/x.png'],
+    ['not base64', 'data:image/svg+xml,%3Csvg%3E'],
+    ['no mime', 'data:;base64,AAAA'],
+    ['broken base64', 'data:image/png;base64,A*B='],
+    ['bad length', 'data:image/png;base64,AAAAA'],
+    ['empty', ''],
+  ];
+  for (const [name, url] of bad) {
+    await t.test(`null for ${name}`, () => assert.equal(dataUrlBytes(url), null));
+  }
+
+  await t.test('bytesDataUrl writes base64', () => {
+    assert.equal(bytesDataUrl('image/png', new Uint8Array([0, 1, 255])), 'data:image/png;base64,AAH/');
+  });
+
+  await t.test('round trip, every byte value and past a chunk', () => {
+    const bytes = new Uint8Array(70000).map((_, i) => (i * 7) % 256);
+    bytes[bytes.length - 1] = 0xff;
+    assert.deepEqual(dataUrlBytes(bytesDataUrl('image/webp', bytes)), { mime: 'image/webp', bytes });
+  });
+});
+
+test('import limits', () => {
+  assert.equal(MAX_NOTE_BYTES, MAX_IMAGE_BYTES);
+  assert.equal(MAX_IMPORT_BYTES, 1024 * 1024 * 1024);
+  assert.equal(MAX_ZIP_ENTRIES, 65535);
+});
+
+test('mdNote', async (t) => {
+  const now = 1000;
+
+  await t.test('a permanent note titled by the name without folders and .md', () => {
+    assert.deepEqual(mdNote('vault/daily/Shopping list.md', '# hi\n', now), {
+      title: 'Shopping list', content: '# hi\n', updatedAt: now, deletedAt: null,
+    });
+  });
+
+  await t.test('only the last .md goes, in any case', () => {
+    assert.equal(mdNote('a.md.MD', 'x', now).title, 'a.md');
+  });
+
+  await t.test('a bare .md is the default title', () => {
+    assert.equal(mdNote('.md', 'x', now).title, DEFAULT_TITLE);
+    assert.equal(mdNote('dir/.md', 'x', now).title, DEFAULT_TITLE);
+  });
+
+  await t.test('CRLF and lone CR become LF', () => {
+    assert.equal(mdNote('a.md', 'a\r\nb\rc\n', now).content, 'a\nb\nc\n');
+  });
+
+  await t.test('the whole text is kept, front matter of another tool included', () => {
+    const text = '---\ntags: [a]\n---\nbody';
+    assert.equal(mdNote('a.md', text, now).content, text);
+  });
+
+  await t.test('null for blank text', () => {
+    assert.equal(mdNote('a.md', '', now), null);
+    assert.equal(mdNote('a.md', ' \r\n\t', now), null);
+  });
+});
+
+test('importedNote', async (t) => {
+  const now = 5000;
+  const id = '3f2a0000-0000-4000-8000-000000000001';
+
+  await t.test('times above now are clamped', () => {
+    const note = { title: 't', content: 'x', updatedAt: 9000, deletedAt: 8000, restoredAt: 7000, binDays: 7 };
+    assert.deepEqual(importedNote(note, now), {
+      title: 't', content: 'x', updatedAt: now, deletedAt: now, restoredAt: now, binDays: 7,
+    });
+  });
+
+  await t.test('times at or below now stay', () => {
+    const note = { title: 't', content: 'x', updatedAt: 5000, deletedAt: null, restoredAt: 1, temporary: true };
+    assert.deepEqual(importedNote(note, now), note);
+  });
+
+  await t.test('no optional keys are added', () => {
+    const note = { title: 't', content: 'x', updatedAt: 1, deletedAt: null };
+    assert.deepEqual(Object.keys(importedNote(note, now)), Object.keys(note));
+  });
+
+  await t.test('a title is trimmed, and a blank one becomes the default', () => {
+    const note = (title) => ({ title, content: 'x', updatedAt: 1, deletedAt: null });
+    assert.equal(importedNote(note('  Shopping  '), now).title, 'Shopping');
+    assert.equal(importedNote(note(''), now).title, DEFAULT_TITLE);
+    assert.equal(importedNote(note(' \t '), now).title, DEFAULT_TITLE);
+  });
+
+  await t.test('binDays is capped at the bin time of a manual trash', () => {
+    const note = (binDays) => ({ title: 't', content: 'x', updatedAt: 1, deletedAt: 2, binDays });
+    assert.equal(importedNote(note(1e15), now).binDays, 30);
+    assert.equal(importedNote(note(31), now).binDays, 30);
+    assert.equal(importedNote(note(7), now).binDays, 7);
+  });
+
+  await t.test('line endings are normalized and links turned back', () => {
+    const note = { title: 't', content: `a\r\n![p](../images/${id}.png)\rb`, updatedAt: 1, deletedAt: null };
+    assert.equal(importedNote(note, now).content, `a\n![p](tabnotes-image:${id})\nb`);
+  });
+});
+
+test('planImport', async (t) => {
+  const ids = Array.from({ length: 6 }, (_, i) => `00000000-0000-4000-8000-00000000000${i}`);
+  const note = (content, extra = {}) => ({ title: 'T', content, updatedAt: 1, deletedAt: null, ...extra });
+  const fresh = () => {
+    let n = 0;
+    return () => `ffffffff-0000-4000-8000-00000000000${n++}`;
+  };
+  const empty = () => ({ contents: new Set(), taken: new Set() });
+
+  await t.test('a new id is stored as it is', () => {
+    const plan = planImport([{ id: ids[0], note: note('a') }], empty(), fresh());
+    assert.deepEqual(plan, { write: { [ids[0]]: note('a') }, identical: [], duplicates: 0 });
+  });
+
+  await t.test('content already local under any id is skipped', () => {
+    const local = { contents: new Set(['a']), taken: new Set([ids[5]]) };
+    const plan = planImport([{ id: ids[0], note: note('a') }, { id: ids[5], note: note('a', { title: 'other' }) }], local, fresh());
+    assert.deepEqual(plan, { write: {}, identical: [note('a'), note('a', { title: 'other' })], duplicates: 0 });
+  });
+
+  await t.test('a taken id with other content becomes a copy', () => {
+    const local = { contents: new Set(['local']), taken: new Set([ids[0]]) };
+    const binned = note('b', { deletedAt: 3, binDays: 7, temporary: true });
+    const plan = planImport([{ id: ids[0], note: binned }], local, fresh());
+    assert.deepEqual(plan, {
+      write: { 'ffffffff-0000-4000-8000-000000000000': { ...binned, title: 'T (imported)' } },
+      identical: [], duplicates: 0,
+    });
+  });
+
+  await t.test('an id open in a tab with no key counts as taken', () => {
+    const local = { contents: new Set(), taken: new Set([ids[0]]) };
+    const plan = planImport([{ id: ids[0], note: note('a') }], local, fresh());
+    assert.deepEqual(Object.keys(plan.write), ['ffffffff-0000-4000-8000-000000000000']);
+  });
+
+  await t.test('a binned incoming note keeps its bin state', () => {
+    const binned = note('b', { deletedAt: 3, binDays: 7 });
+    assert.deepEqual(planImport([{ id: ids[0], note: binned }], empty(), fresh()).write, { [ids[0]]: binned });
+  });
+
+  await t.test('duplicate ids: the first wins', () => {
+    const plan = planImport([{ id: ids[0], note: note('first') }, { id: ids[0], note: note('second') }], empty(), fresh());
+    assert.deepEqual(plan, { write: { [ids[0]]: note('first') }, identical: [], duplicates: 1 });
+  });
+
+  await t.test('planning the same input twice against the first result writes nothing', () => {
+    const incoming = [{ id: ids[0], note: note('a') }, { id: ids[1], note: note('b') }];
+    const local = { contents: new Set(['changed']), taken: new Set([ids[1]]) };
+    const first = planImport(incoming, local, fresh());
+    assert.equal(Object.keys(first.write).length, 2);
+    const after = {
+      contents: new Set([...local.contents, ...Object.values(first.write).map((n) => n.content)]),
+      taken: new Set([...local.taken, ...Object.keys(first.write)]),
+    };
+    assert.deepEqual(planImport(incoming, after, fresh()), { write: {}, identical: [note('a'), note('b')], duplicates: 0 });
+  });
+
+  await t.test('mixed input counts right', () => {
+    const local = { contents: new Set(['same']), taken: new Set([ids[1], ids[2]]) };
+    const plan = planImport([
+      { id: ids[0], note: note('new') },
+      { id: ids[1], note: note('same') },
+      { id: ids[2], note: note('changed') },
+      { id: ids[0], note: note('dup') },
+      { id: ids[3], note: note('new too') },
+    ], local, fresh());
+    assert.deepEqual(Object.keys(plan.write), [ids[0], 'ffffffff-0000-4000-8000-000000000000', ids[3]]);
+    assert.deepEqual([plan.identical, plan.duplicates], [[note('same')], 1]);
+  });
+});
+
+test('importSummary', async (t) => {
+  const result = (extra) => ({ imported: 0, images: 0, identical: 0, copies: 0, rejected: {}, ...extra });
+  const cases = [
+    ['nothing', result({}), 'Imported 0 notes.'],
+    ['one note', result({ imported: 1 }), 'Imported 1 note.'],
+    ['notes and images', result({ imported: 3, images: 1 }), 'Imported 3 notes and 1 image.'],
+    ['one copy', result({ imported: 2, copies: 1 }), 'Imported 2 notes (1 as a copy).'],
+    ['copies', result({ imported: 2, copies: 2, images: 2 }), 'Imported 2 notes (2 as copies) and 2 images.'],
+    ['identical', result({ identical: 4 }), 'Imported 0 notes. 4 already present.'],
+    ['rejected, sorted by reason', result({ imported: 1, rejected: { 'too large': 1, 'bad note file': 2 } }),
+      'Imported 1 note. Skipped: bad note file (2), too large (1).'],
+  ];
+  for (const [name, r, want] of cases) {
+    await t.test(name, () => assert.equal(importSummary(r), want));
+  }
+
+  await t.test('a stopped error is shown as text', () => {
+    const text = importSummary(result({ stopped: new Error('quota exceeded') }));
+    assert.equal(text, `Import stopped by a failed write (Error: quota exceeded) after 0 notes. ${STORAGE_FULL_HINT}`);
+  });
+
+  await t.test('a write rejected with undefined still reads as stopped', () => {
+    const text = importSummary(result({ stopped: undefined }));
+    assert.equal(text, `Import stopped by a failed write (undefined) after 0 notes. ${STORAGE_FULL_HINT}`);
+  });
+
+  await t.test('stopped names what got in and holds the storage hint', () => {
+    const text = importSummary(result({ images: 2, identical: 1, rejected: { 'bad image': 1 }, stopped: 'quota exceeded' }));
+    assert.equal(text, 'Import stopped by a failed write (quota exceeded) after 0 notes and 2 images. 1 already present. '
+      + `Skipped: bad image (1). ${STORAGE_FULL_HINT}`);
+  });
+});
+
+test('exportSummary', async (t) => {
+  const cases = [
+    ['one note', [1, []], 'Exported 1 note.'],
+    ['notes', [3, []], 'Exported 3 notes.'],
+    ['one image left out', [2, ['a']], 'Exported 2 notes. Left out 1 image that could not be read: a.'],
+    ['images left out', [0, ['a', 'b']], 'Exported 0 notes. Left out 2 images that could not be read: a, b.'],
+  ];
+  for (const [name, [notes, broken], want] of cases) {
+    await t.test(name, () => assert.equal(exportSummary(notes, broken), want));
+  }
+});
+
+test('zipFits', async (t) => {
+  // each entry costs a 30-byte local header and its name besides its data
+  const entry = (size, name = 'a') => ({ name, size });
+  const cases = [
+    ['nothing', [], true],
+    ['exactly 4 GB of headers and data', [entry(0xffffffff - 31)], true],
+    ['one byte over', [entry(0xffffffff - 30)], false],
+    ['names count in UTF-8 bytes', [entry(0xffffffff - 32, '\u00e9')], true],
+    ['a multi-byte name over by one', [entry(0xffffffff - 31, '\u00e9')], false],
+    ['65,535 entries', Array.from({ length: 0xffff }, () => entry(0)), true],
+    ['65,536 entries', Array.from({ length: 0x10000 }, () => entry(0)), false],
+  ];
+  for (const [name, entries, want] of cases) {
+    await t.test(name, () => assert.equal(zipFits(entries), want));
+  }
 });

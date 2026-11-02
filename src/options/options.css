@@ -24,8 +24,14 @@ body {
   width: 8em;
 }
 
-.title-hint {
+.title-hint,
+.transfer-status {
   color: var(--color-muted);
+}
+
+.transfer {
+  display: flex;
+  gap: var(--space-2);
 }
 
 .error {

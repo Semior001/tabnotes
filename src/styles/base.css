@@ -78,6 +78,7 @@ body {
 /* scoped, as a bare button, input or select rule also restyles CodeMirror's search dialog */
 .header button,
 .banner button,
+.field button,
 .code-block .copy,
 .action,
 .header input,
@@ -91,6 +92,7 @@ body {
 
 .header button,
 .banner button,
+.field button,
 .code-block .copy,
 .action {
   padding: 0 10px;
@@ -101,6 +103,7 @@ body {
 
 .header button:hover,
 .banner button:hover,
+.field button:hover,
 .code-block .copy:hover,
 .action:hover {
   background: var(--color-surface-hover);

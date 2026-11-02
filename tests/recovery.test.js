@@ -5,7 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { unzipSync, zipSync } = require('fflate');
 const { bundle } = require('./bundle.js');
+const { importSummary, noteFile } = require('../src/lib/notes.ts');
 
 const root = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
@@ -39,6 +41,10 @@ function element(attrs = {}, focus = { active: null }) {
     },
     focus() {
       focus.active = this;
+    },
+    clicks: 0,
+    click() {
+      this.clicks++;
     },
     contains(node) {
       return node === this || this.children.some((c) => c.contains(node));
@@ -109,7 +115,8 @@ class FixedDate extends Date {
 // fire an event to simulate a change; reject is read at call time too
 // ('storage.local.getKeys' and 'storage.local.get' fail the refresh at its first
 // and second read, 'storage.local.get key' the re-read; a function value decides
-// by the call's arguments). With
+// by the call's arguments). The <a download> elements the page creates are in
+// anchors, the Blobs given to URL.createObjectURL in blobs. With
 // hold set, getRecentlyClosed stays pending until the test calls one of the
 // held resolvers, which take an optional error to reject with instead.
 // onStop runs inside runtime.sendMessage before it resolves, like the final
@@ -138,12 +145,16 @@ async function runRecovery({
     bar: make({ hidden: true }),
     'new-permanent': make(),
     'new-temporary': make(),
+    'export-all': make(),
+    'import-notes': make(),
+    'import-file': make({ hidden: true, files: [] }),
     'bar-count': make(),
     'bar-permanent': make(),
     'bar-temporary': make(),
     'bar-move': make(),
     'bar-restore': make(),
     'bar-delete': make(),
+    'bar-export': make(),
     'bar-clear': make(),
     status: make({ hidden: true }),
     'status-text': make(),
@@ -152,7 +163,7 @@ async function runRecovery({
     'bin-details': make({ open: false }),
     'bin-summary': make(),
   };
-  els.bar.children = ['bar-count', 'bar-permanent', 'bar-temporary', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear'].map((id) => els[id]);
+  els.bar.children = ['bar-count', 'bar-permanent', 'bar-temporary', 'bar-move', 'bar-restore', 'bar-delete', 'bar-export', 'bar-clear'].map((id) => els[id]);
   for (const s of ['open', 'recent', 'other', 'bin']) {
     els[s] = make();
     els[`${s}-section`] = make({ hidden: true });
@@ -166,7 +177,12 @@ async function runRecovery({
   const held = [];
   const confirms = [];
   const timers = [];
-  const counter = { refreshes: 0 };
+  // refreshes counts getKeys calls, closedReads the getRecentlyClosed calls
+  // only a refresh makes
+  const counter = { refreshes: 0, closedReads: 0 };
+  const body = make();
+  const anchors = [];
+  const blobs = [];
   // the key lists refreshes passed to get; calls holds only per-note re-reads
   const reads = [];
   const listeners = {};
@@ -184,6 +200,7 @@ async function runRecovery({
     },
   );
   const queries = [];
+  let uuids = 0;
   // call records a browser API call and rejects when the test asked it to;
   // args are cloned into this realm so deepStrictEqual compares prototypes
   const call = async (name, ...args) => {
@@ -192,9 +209,22 @@ async function runRecovery({
     if (fails) throw new Error(`${name} rejected`);
   };
   const ctx = vm.createContext({
-    URL,
+    URL: class extends URL {
+      static createObjectURL(blob) {
+        blobs.push(blob);
+        return `blob:moz-extension://uuid/${blobs.length}`;
+      }
+
+      static revokeObjectURL() {}
+    },
+    Blob,
+    TextEncoder,
+    TextDecoder,
+    atob,
+    btoa,
     Date: FixedDate,
-    crypto: { randomUUID: () => ID4 },
+    // ID4 first, as new-note tests expect it, then distinct ids
+    crypto: { randomUUID: () => (uuids++ === 0 ? ID4 : `00000000-0000-4000-8000-${String(uuids).padStart(12, '0')}`) },
     console: { warn: (...a) => warnings.push(a) },
     // recorded, never run: the page must not depend on timers
     setTimeout: (fn, delay) => timers.push({ fn, delay }),
@@ -206,9 +236,19 @@ async function runRecovery({
     },
     document: {
       getElementById: (id) => els[id],
-      body: make(),
+      body,
       addEventListener: (type, fn) => doc.addEventListener(type, fn),
-      createElement: (tag) => element({ tagName: tag.toUpperCase() }, focus),
+      createElement: (tag) => {
+        const n = element({ tagName: tag.toUpperCase() }, focus);
+        if (tag !== 'a') return n;
+        n.clicked = [];
+        n.click = () => n.clicked.push({ href: n.href, download: n.download, attached: body.children.includes(n) });
+        n.remove = () => {
+          body.children = body.children.filter((c) => c !== n);
+        };
+        anchors.push(n);
+        return n;
+      },
       get activeElement() {
         return focus.active;
       },
@@ -275,6 +315,7 @@ async function runRecovery({
       },
       sessions: {
         getRecentlyClosed: () => {
+          counter.closedReads++;
           const snapshot = structuredClone(state.closed);
           if (!hold) return Promise.resolve(snapshot);
           return new Promise((resolve, fail) => held.push((err) => (err ? fail(err) : resolve(snapshot))));
@@ -308,16 +349,22 @@ async function runRecovery({
     await settle();
   };
   const button = (s, i, text) => buttons(entry(s, i)).find((x) => label(x) === text);
-  return { els, state, warnings, calls, reads, held, confirms, timers, counter, events, listeners, queries, entry, snippets, labels, click, button, focus, tick, ticked, tickAll, press: key_ };
+  // pick selects files in the hidden input the way the file picker does
+  const pick = (files) => {
+    els['import-file'].files = files;
+    els['import-file'].dispatch('change');
+  };
+  return { anchors, blobs, pick, els, state, warnings, calls, reads, held, confirms, timers, counter, events, listeners, queries, entry, snippets, labels, click, button, focus, tick, ticked, tickAll, press: key_ };
 }
 
 test('recovery.html loads its scripts and starts with the harness state', () => {
   const html = read('src', 'recovery', 'recovery.html');
   const srcs = [...html.matchAll(/<script\s+src="([^"]+)"><\/script>/g)].map((m) => m[1]);
   assert.deepEqual(srcs, ['../theme.js', 'recovery.js']);
-  const hidden = ['error', 'empty', 'bar', 'status', 'status-undo'];
+  const hidden = ['error', 'empty', 'bar', 'status', 'status-undo', 'import-file'];
   const ids = [
-    'header', 'search', 'new-permanent', 'new-temporary', 'settings', ...hidden, 'bar-count', 'bar-permanent', 'bar-temporary', 'bar-move', 'bar-restore', 'bar-delete', 'bar-clear',
+    'header', 'search', 'new-permanent', 'new-temporary', 'export-all', 'import-notes', 'settings', ...hidden, 'bar-count', 'bar-permanent', 'bar-temporary',
+    'bar-move', 'bar-restore', 'bar-delete', 'bar-export', 'bar-clear',
     'status-text', 'bin-details', 'bin-summary', 'empty-bin',
   ];
   for (const s of ['open', 'recent', 'other', 'bin']) {
@@ -330,6 +377,10 @@ test('recovery.html loads its scripts and starts with the harness state', () => 
     assert.equal(/\shidden[\s>]/.test(tag[0]), hidden.includes(id), id);
   }
   assert.doesNotMatch(html.match(/<details[^>]*>/)[0], /\sopen/);
+  assert.match(html, /<button id="export-all" type="button">Export all<\/button>/);
+  assert.match(html, /<button id="import-notes" type="button">Import\.\.\.<\/button>/);
+  assert.match(html, /<input id="import-file" type="file" accept="\.zip,\.md" multiple hidden>/);
+  assert.match(html, /<button id="bar-export" type="button">Export<\/button>/);
 });
 
 test('recovery', async (t) => {
@@ -1781,5 +1832,210 @@ test('recovery', async (t) => {
     });
     assert.deepEqual(reads, [[key(ID1), 'settings']]);
     assert.deepEqual(snippets('other'), ['a']);
+  });
+});
+
+test('recovery export and import', async (t) => {
+  // not ID4, which the harness's randomUUID returns first
+  const BACKUP = 'c56a4180-65aa-42ec-a945-5fd21dec0538';
+  const notes = () => ({
+    [key(ID1)]: note(3, { title: 'One', content: 'one' }),
+    [key(ID2)]: note(2, { title: 'Two', content: 'two' }),
+    [key(ID3)]: note(1, { title: 'Gone', content: 'gone', deletedAt: NOW }),
+  });
+  const files = async (blob) => Object.keys(unzipSync(new Uint8Array(await blob.arrayBuffer()))).sort();
+  const imported = { title: 'Backup', content: 'from the backup', updatedAt: 5, deletedAt: null };
+  const backup = () => new File([zipSync({
+    'permanent/Backup.md': new TextEncoder().encode(noteFile(BACKUP, imported, imported.content)),
+  })], 'tabnotes-2026-10-29.zip');
+  const press = async (els, id) => {
+    els[id].dispatch('click');
+    await settle();
+  };
+
+  await t.test('Export all downloads every note, Bin included', async () => {
+    const { els, anchors, blobs, warnings } = await runRecovery({ storage: notes() });
+    await press(els, 'export-all');
+    assert.equal(anchors.length, 1);
+    assert.deepEqual(anchors[0].clicked, [{ href: 'blob:moz-extension://uuid/1', download: anchors[0].download, attached: true }]);
+    assert.match(anchors[0].download, /^tabnotes-\d{4}-\d{2}-\d{2}\.zip$/);
+    assert.deepEqual(await files(blobs[0]), ['bin/Gone.md', 'permanent/One.md', 'permanent/Two.md']);
+    assert.equal(els['status-text'].textContent, 'Exported 3 notes.');
+    assert.equal(els.status.hidden, false);
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('Export in the bar exports the live selection and keeps it', async () => {
+    const { els, blobs, tick, ticked } = await runRecovery({ storage: notes() });
+    tick('other', 1);
+    await press(els, 'bar-export');
+    assert.deepEqual(await files(blobs[0]), ['permanent/Two.md']);
+    assert.equal(els['status-text'].textContent, 'Exported 1 note.');
+    assert.equal(els.bar.hidden, false);
+    assert.deepEqual(ticked('other'), [false, true]);
+  });
+
+  await t.test('Export in the bar exports a Bin selection', async () => {
+    const { els, blobs, tick, ticked } = await runRecovery({ storage: notes() });
+    tick('bin', 0);
+    assert.equal(els['bar-export'].hidden, false);
+    await press(els, 'bar-export');
+    assert.deepEqual(await files(blobs[0]), ['bin/Gone.md']);
+    assert.deepEqual(ticked('bin'), [true]);
+  });
+
+  await t.test('export names the images it left out', async () => {
+    const storage = notes();
+    storage[key(ID1)].content = `![x](tabnotes-image:${ID4})`;
+    storage[`image:${ID4}`] = { dataUrl: 'data:text/plain;base64,AAAA' };
+    const { els } = await runRecovery({ storage });
+    await press(els, 'export-all');
+    assert.equal(els['status-text'].textContent, `Exported 3 notes. Left out 1 image that could not be read: ${ID4}.`);
+  });
+
+  await t.test('a failed export shows a message, logs and saves nothing', async () => {
+    const reject = {};
+    const { els, anchors, warnings } = await runRecovery({ storage: notes(), reject });
+    reject['storage.local.getKeys'] = true;
+    await press(els, 'export-all');
+    assert.equal(anchors.length, 0);
+    assert.equal(els['status-text'].textContent, 'Could not export notes: list keys.');
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: export notes:']);
+  });
+
+  await t.test('Import opens the file picker', async () => {
+    const { els } = await runRecovery();
+    await press(els, 'import-notes');
+    assert.equal(els['import-file'].clicks, 1);
+  });
+
+  await t.test('an import shows its summary and the notes appear after one refresh', async () => {
+    const { els, state, counter, snippets, pick, warnings } = await runRecovery({ storage: notes() });
+    const before = counter.closedReads;
+    pick([backup(), new File(['x'], 'notes.txt')]);
+    await settle();
+    assert.deepEqual(state.storage[key(BACKUP)], imported);
+    assert.equal(
+      els['status-text'].textContent,
+      importSummary({ imported: 1, images: 0, identical: 0, copies: 0, rejected: { 'unsupported file': 1 } }),
+    );
+    assert.equal(els.status.hidden, false);
+    assert.equal(els['import-file'].value, '');
+    assert.equal(counter.closedReads, before + 1);
+    assert.deepEqual(snippets('other'), ['from the backup', 'one', 'two']);
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('a pick with no files does nothing', async () => {
+    const { els, calls, pick } = await runRecovery({ storage: notes() });
+    pick([]);
+    await settle();
+    assert.deepEqual(calls, []);
+    assert.equal(els.status.hidden, true);
+  });
+
+  await t.test('a failed import shows a message and logs', async () => {
+    const reject = {};
+    const { els, calls, pick, warnings } = await runRecovery({ storage: notes(), reject });
+    reject['storage.local.getKeys'] = true;
+    pick([backup()]);
+    await settle();
+    assert.equal(els['status-text'].textContent, 'Could not import notes: list keys.');
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: import notes:']);
+    assert.deepEqual(calls.filter((c) => c[0] === 'storage.local.set'), []);
+  });
+
+  await t.test('an import ends a pending Undo', async () => {
+    const { els, state, calls, tick, pick } = await runRecovery({ storage: notes() });
+    tick('other', 0);
+    await press(els, 'bar-move');
+    assert.equal(els['status-undo'].hidden, false);
+    pick([backup()]);
+    await settle();
+    assert.equal(els['status-undo'].hidden, true);
+    assert.match(els['status-text'].textContent, /^Imported 1 note\./);
+    const sets = calls.filter((c) => c[0] === 'storage.local.set').length;
+    await press(els, 'status-undo');
+    assert.equal(calls.filter((c) => c[0] === 'storage.local.set').length, sets);
+    assert.equal(state.storage[key(ID1)].deletedAt, NOW);
+  });
+
+  await t.test('an export ends a pending Undo', async () => {
+    const { els, tick } = await runRecovery({ storage: notes() });
+    tick('other', 0);
+    await press(els, 'bar-move');
+    await press(els, 'export-all');
+    assert.equal(els['status-undo'].hidden, true);
+  });
+
+  await t.test('a bulk click during an import is ignored', async () => {
+    const { els, state, calls, tick, pick } = await runRecovery({ storage: notes() });
+    tick('other', 0);
+    pick([backup()]);
+    els['bar-move'].dispatch('click');
+    await settle();
+    assert.equal(state.storage[key(ID1)].deletedAt, null);
+    assert.deepEqual(calls.filter((c) => c[0] === 'storage.local.set').map((c) => Object.keys(c[1])), [[key(BACKUP)]]);
+  });
+
+  await t.test('an import during a bulk run is refused with a message', async () => {
+    const { els, state, tick, pick } = await runRecovery({ storage: notes() });
+    let reads = 0;
+    tick('other', 0);
+    els['bar-move'].dispatch('click');
+    pick([{ name: 'a.md', size: 1, arrayBuffer: async () => (reads++, new TextEncoder().encode('a').buffer) }]);
+    assert.equal(els['status-text'].textContent, 'Could not import notes: another action is running.');
+    assert.equal(els.status.hidden, false);
+    await settle();
+    assert.equal(reads, 0);
+    assert.equal(state.storage[key(ID1)].deletedAt, NOW);
+    assert.equal(els['status-text'].textContent, 'Moved 1 note to the Bin');
+  });
+
+  await t.test('an export during an import is refused with a message', async () => {
+    const { els, pick, anchors } = await runRecovery({ storage: notes() });
+    let release;
+    const held = new Promise((r) => (release = r));
+    pick([{ name: 'a.md', size: 1, arrayBuffer: () => held }]);
+    await press(els, 'export-all');
+    assert.equal(els['status-text'].textContent, 'Could not export notes: another action is running.');
+    assert.equal(anchors.length, 0);
+    release(new TextEncoder().encode('a').buffer);
+    await settle();
+    assert.match(els['status-text'].textContent, /^Imported 1 note\./);
+  });
+
+  await t.test('a backup and a plain file get distinct ids', async () => {
+    const { state, pick } = await runRecovery({ storage: notes() });
+    pick([backup(), new File(['loose'], 'Loose.md')]);
+    await settle();
+    assert.deepEqual(state.storage[key(BACKUP)], imported);
+    const loose = Object.values(state.storage).filter((n) => n.content === 'loose');
+    assert.equal(loose.length, 1);
+  });
+
+  await t.test('a failed note write shows the summary and logs the error', async () => {
+    const reject = {};
+    const { els, pick, warnings } = await runRecovery({ storage: notes(), reject });
+    reject['storage.local.set'] = true;
+    pick([backup()]);
+    await settle();
+    const stopped = 'Error: storage.local.set rejected';
+    // the error itself is logged, so the console keeps its stack
+    assert.equal(
+      els['status-text'].textContent,
+      importSummary({ imported: 0, images: 0, identical: 0, copies: 0, rejected: {}, stopped }),
+    );
+    assert.deepEqual(warnings.map(([what, err]) => [what, typeof err, String(err)]), [['tabnotes: import notes:', 'object', stopped]]);
+  });
+
+  await t.test('a rejection that is no Error shows its text', async () => {
+    const { els, pick, warnings } = await runRecovery({ storage: notes() });
+    // a name getter throwing a string is the one way to reach it here, as
+    // transfer.ts wraps every browser.* failure in an Error
+    pick([{ get name() { throw 'boom'; } }]);
+    await settle();
+    assert.equal(els['status-text'].textContent, 'Could not import notes: boom.');
+    assert.deepEqual(warnings, [['tabnotes: import notes:', 'boom']]);
   });
 });

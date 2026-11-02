@@ -125,6 +125,63 @@ interface ScrollAnchor {
   to: number;
 }
 
+// ZipEntry is one central directory entry; data is its compressed bytes, null
+// when the local header or the data lie past the end of the zip.
+export interface ZipEntry {
+  name: string;
+  compression: number;
+  size: number;
+  originalSize: number;
+  data: Uint8Array | null;
+}
+
+export interface ExportResult {
+  blob: Blob;
+  name: string;
+  notes: number;
+  // ids of referenced images whose stored data URL does not decode
+  broken: string[];
+}
+
+export interface ImportedNote {
+  id: string;
+  note: Note;
+}
+
+// LocalState is what an import checks against: the content of every stored
+// note, and the ids stored or open in a note tab, as a cleared note's tab has
+// no key but still holds its id.
+interface LocalState {
+  contents: Set<string>;
+  taken: Set<string>;
+}
+
+interface ImportPlan {
+  write: Record<string, Note>;
+  // the notes skipped as already stored, whose images an import still restores
+  identical: Note[];
+  duplicates: number;
+}
+
+// ImportResult says what an import did; stopped is the error of the failed
+// write that ended it, kept as thrown so the page logs it with its stack.
+export interface ImportResult {
+  imported: number;
+  images: number;
+  identical: number;
+  copies: number;
+  rejected: Record<string, number>;
+  stopped?: unknown;
+}
+
+// ZipPath is how an import treats a zip entry by its name, name being it
+// without leading ./ segments.
+type ZipPath =
+  | { kind: 'skip'; name: string }
+  | { kind: 'unsupported'; name: string }
+  | { kind: 'note'; name: string }
+  | { kind: 'image'; name: string; id: string; mime: string };
+
 // canOpen reports whether tabs.create accepts the URL; Firefox rejects
 // file:, data:, javascript: and privileged about: URLs.
 export function canOpen(url: unknown): boolean {
@@ -180,6 +237,23 @@ const FONT_SIZE_DEFAULT = 14;
 const FONT_SIZE_MIN = 10;
 const FONT_SIZE_MAX = 32;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+// MAX_NOTE_BYTES limits one note file on import, as MAX_IMAGE_BYTES does one
+// image; MAX_IMPORT_BYTES limits a zip file and the declared sizes admitted
+// from it. MAX_ZIP_ENTRIES is the most entries an export can hold (zipFits),
+// checked before the walk, as a zip64 record can claim billions.
+export const MAX_NOTE_BYTES = MAX_IMAGE_BYTES;
+export const MAX_IMPORT_BYTES = 1024 * 1024 * 1024;
+export const MAX_ZIP_ENTRIES = 0xffff;
+// the front matter keys of a note file, in the order noteFile writes them
+const NOTE_FILE_KEYS = ['id', 'title', 'updatedAt', 'deletedAt', 'temporary', 'binDays', 'restoredAt'] as const;
+type NoteFileKey = typeof NOTE_FILE_KEYS[number];
+// an image subtype as a file extension: starting with a letter or digit, so
+// it cannot form a `..` name
+const IMAGE_EXT = '[a-z0-9][a-z0-9.+-]*';
+const EXPORT_REF_RE = new RegExp(`\\(${IMAGE_SCHEME}(${ID_CHARS})\\)`, 'g');
+const IMPORT_REF_RE = new RegExp(`\\(\\.\\./images/(${ID_CHARS})\\.${IMAGE_EXT}\\)`, 'g');
+const IMAGE_PATH_RE = new RegExp(`^images/(${ID_CHARS})\\.(${IMAGE_EXT})$`);
+const IMAGE_MIME_RE = new RegExp(`^image/(${IMAGE_EXT})$`);
 // STORAGE_FULL_HINT follows a failed write, of an image or a note
 export const STORAGE_FULL_HINT = `Storage may be full, and deleted images free space only after ${IMAGE_GRACE_DAYS} days.`;
 // KIND_HINT is the tooltip of the kind button on the note page
@@ -305,7 +379,10 @@ export function closedDaysLeft(firstSeen: number | undefined, note: Note, now: n
   return daysUntil(Math.max(firstSeen ?? now, note.updatedAt, note.restoredAt ?? 0), TEMPORARY_DAYS, now);
 }
 
-const leftText = (n: number) => `${n} day${n === 1 ? '' : 's'} left`;
+// countText is n with what, plural unless n is 1
+export const countText = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+
+const leftText = (n: number) => `${countText(n, 'day')} left`;
 
 // closedDaysLeftText is that countdown as All notes shows it
 export function closedDaysLeftText(firstSeen: number | undefined, note: Note, now: number): string {
@@ -767,8 +844,11 @@ export function imageHTML(id: string, alt: string): string {
   return `<img data-image="${id}" alt="${escapeHTML(alt)}" draggable="false">`;
 }
 
-const referencedImages = (notes: Record<string, Note>) =>
-  new Set(Object.values(notes).flatMap((note) => [...imageRefs(note.content)]));
+// referencedImages is the ids of the images these notes reference
+export const referencedImages = (notes: Note[]) => new Set(notes.flatMap((note) => [...imageRefs(note.content)]));
+
+// storedImageIds is the ids of the images among these storage keys
+export const storedImageIds = (keys: string[]) => new Set(keys.map(idFromImageKey).filter((id) => id !== null));
 
 // sweepImages decides which stored images to drop. Binned notes count as
 // references, and the grace runs from the first sweep that found an image
@@ -779,7 +859,7 @@ export function sweepImages(
   orphans: ImageOrphans,
   now: number,
 ): ImageSweep {
-  const referenced = referencedImages(notes);
+  const referenced = referencedImages(Object.values(notes));
   const sweep: ImageSweep = { remove: [], orphans: {} };
   for (const key of keys) {
     const id = idFromImageKey(key);
@@ -798,7 +878,7 @@ export function sweepImages(
 // notes. It only drops ids, never runs a new sweep: an id referenced before and
 // unreferenced now has no map entry yet, and its grace starts at the next sweep.
 export function withoutReferenced(sweep: ImageSweep, notes: Record<string, Note>): ImageSweep {
-  const referenced = referencedImages(notes);
+  const referenced = referencedImages(Object.values(notes));
   return {
     remove: sweep.remove.filter((id) => !referenced.has(id)),
     orphans: Object.fromEntries(Object.entries(sweep.orphans).filter(([id]) => !referenced.has(id))),
@@ -911,4 +991,381 @@ export function themeFrom(value: unknown): ThemeMode {
 export function isDarkTheme(mode: ThemeMode, systemDark: boolean): boolean {
   if (mode === 'system') return systemDark;
   return mode === 'dark';
+}
+
+// noteFile is a note as a markdown file: a YAML front matter whose values are
+// JSON, which YAML reads too, so parseNoteFile needs no YAML parser. Keys come
+// in a fixed order and optional ones only when set, so the bytes are stable.
+// content is passed in, as an export writes the text with rewritten links.
+export function noteFile(id: string, note: Note, content: string): string {
+  const values: Record<NoteFileKey, unknown> = {
+    id,
+    title: note.title,
+    updatedAt: note.updatedAt,
+    deletedAt: note.deletedAt,
+    temporary: note.temporary,
+    binDays: note.deletedAt === null ? undefined : note.binDays,
+    restoredAt: note.restoredAt,
+  };
+  const lines = NOTE_FILE_KEYS.filter((k) => values[k] !== undefined).map((k) => `${k}: ${JSON.stringify(values[k])}`);
+  return ['---', ...lines, '---', content].join('\n');
+}
+
+// parseNoteFile reads a noteFile, also with CRLF line ends. A file whose front
+// matter holds no tabnotes id line is 'plain' markdown, front matter of
+// another tool included; with one, any deviation is null, as is invalid UTF-8.
+// The content after the front matter is kept byte for byte.
+export function parseNoteFile(bytes: Uint8Array): { id: string; note: Note } | 'plain' | null {
+  let text: string;
+  try {
+    // ignoreBOM keeps a BOM in the text, so it cannot vanish from content
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  const open = /^---\r?\n/.exec(text);
+  if (open === null) return 'plain';
+
+  const lines: string[] = [];
+  let body: number | null = null;
+  for (let pos = open[0].length; pos < text.length && body === null;) {
+    const nl = text.indexOf('\n', pos);
+    const end = nl === -1 ? text.length : nl + 1;
+    const line = text.slice(pos, nl === -1 ? end : nl).replace(/\r$/, '');
+    if (line === '---') body = end;
+    else lines.push(line);
+    pos = end;
+  }
+
+  // with no closing line it is no front matter, but a thematic break
+  if (body === null) return 'plain';
+  // an id unquoted or in single quotes, as a YAML editor may rewrite it,
+  // still marks a tabnotes file: imported as plain text it would duplicate
+  // the note under a new id and lose its state, so it is refused instead
+  if (!lines.some((line) => ID_RE.test(/^id: (["']?)(.*)\1$/.exec(line)?.[2] ?? ''))) return 'plain';
+
+  const keys = new Set<string>(NOTE_FILE_KEYS);
+  const v: Record<string, unknown> = {};
+  for (const line of lines) {
+    const m = /^(\w+): (.*)$/s.exec(line);
+    if (m === null || !keys.has(m[1]) || Object.hasOwn(v, m[1])) return null;
+    try {
+      v[m[1]] = JSON.parse(m[2]);
+    } catch {
+      return null;
+    }
+  }
+  const time = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0;
+  const { id, title, updatedAt, deletedAt, temporary, binDays, restoredAt } = v;
+  if (typeof id !== 'string' || typeof title !== 'string' || !time(updatedAt)) return null;
+  if (deletedAt !== null && !time(deletedAt)) return null;
+  if (temporary !== undefined && temporary !== true) return null;
+  if (restoredAt !== undefined && !time(restoredAt)) return null;
+  if (binDays !== undefined && (deletedAt === null || !Number.isSafeInteger(binDays) || (binDays as number) < 1)) return null;
+
+  const content = text.slice(body);
+  if (deletedAt === null && !content.trim()) return null;
+  const base = {
+    title, content, updatedAt,
+    ...(temporary === true ? { temporary: true as const } : {}),
+    ...(restoredAt !== undefined ? { restoredAt } : {}),
+  };
+  const note: Note = deletedAt === null
+    ? { ...base, deletedAt }
+    : { ...base, deletedAt, ...(binDays !== undefined ? { binDays: binDays as number } : {}) };
+  return { id, note };
+}
+
+// fileNames is the zip path of each note, named as All notes names it and
+// made safe for every OS. 200 bytes leaves room for " (n).md" under the 255
+// byte limit of filesystems, and 100 UTF-16 units keeps the path under the
+// 260 of Windows MAX_PATH, past which Explorer's Extract All refuses or skips
+// a file, when it extracts into a Downloads folder. Duplicates compare
+// lowercased, as Windows and macOS do, and notes are named newest first, then
+// by id, so the same notes get the same names.
+export function fileNames(notes: Record<string, Note>, defaultTitle: string): Record<string, string> {
+  const utf8 = new TextEncoder();
+  const safe = (name: string): string => {
+    let cut = '';
+    let size = 0;
+    for (const ch of name.normalize('NFC').replace(/[/\\:*?"<>|\p{Cc}]/gu, '-')) {
+      size += utf8.encode(ch).length;
+      if (size > 200 || cut.length + ch.length > 100) break;
+      cut += ch;
+    }
+    const trimmed = cut.replace(/^[. ]+|[. ]+$/g, '');
+    // CON.txt is as reserved as CON, so the suffix goes before the first dot
+    const stem = trimmed.replace(/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?=\.|$)/i, '$1_');
+    return stem || 'note';
+  };
+  const order = Object.keys(notes).sort((a, b) => notes[b].updatedAt - notes[a].updatedAt || (a < b ? -1 : 1));
+  const used = new Set<string>();
+  const names: Record<string, string> = {};
+  for (const id of order) {
+    // import reads the front matter, so the folder is only for a reader
+    const note = notes[id];
+    const folder = note.deletedAt !== null ? 'bin' : note.temporary ? 'temporary' : 'permanent';
+    const base = safe(rowText(note, defaultTitle).name);
+    let name = base;
+    for (let n = 2; used.has(`${folder}/${name}`.toLowerCase()); n++) name = `${base} (${n})`;
+    used.add(`${folder}/${name}`.toLowerCase());
+    names[id] = `${folder}/${name}.md`;
+  }
+  return names;
+}
+
+// imageExt is the file extension an export gives an image of this mime type,
+// or null for anything not an image.
+export function imageExt(mime: string): string | null {
+  const m = IMAGE_MIME_RE.exec(mime);
+  if (m === null) return null;
+  switch (m[1]) {
+    case 'jpeg': return 'jpg';
+    case 'svg+xml': return 'svg';
+    case 'x-icon': return 'ico';
+    default: return m[1];
+  }
+}
+
+// imageFromPath is the image id and mime type of a zip entry written for
+// imageExt, or null for any other path, nested and traversing ones included.
+export function imageFromPath(path: string): { id: string; mime: string } | null {
+  const m = IMAGE_PATH_RE.exec(path);
+  if (m === null) return null;
+  const sub = (() => {
+    switch (m[2]) {
+      case 'jpg': return 'jpeg';
+      case 'svg': return 'svg+xml';
+      case 'ico': return 'x-icon';
+      default: return m[2];
+    }
+  })();
+  return { id: m[1], mime: `image/${sub}` };
+}
+
+// zipPath classifies a zip entry by its name. Notes are admitted at a safe
+// path, and images at any depth like notes, as zipping an unpacked export
+// again can put everything under one folder.
+export function zipPath(entryName: string): ZipPath {
+  // Compress-Archive of Windows PowerShell 5.1 separates folders with \, and
+  // bsdtar, the tar of Windows and macOS, writes ./ before every name when
+  // given . as the folder to zip
+  const slashed = entryName.replaceAll('\\', '/');
+  const name = slashed.replace(/^(\.\/)+/, '');
+  // a directory entry holds nothing, and macOS adds __MACOSX/ and ._ entries
+  // of file metadata when it zips a folder
+  if (slashed.endsWith('/') || /^__MACOSX\/|(^|\/)\._/.test(name)) return { kind: 'skip', name };
+  // entry names never become storage keys, but traversing ones are still refused
+  const safe = !name.startsWith('/')
+    && name.split('/').every((part) => part !== '' && part !== '.' && part !== '..');
+  if (!safe) return { kind: 'unsupported', name };
+  const image = imageFromPath(name.split('/').slice(-2).join('/'));
+  if (image !== null) return { kind: 'image', name, ...image };
+  if (!/\.md$/i.test(name)) return { kind: 'unsupported', name };
+  return { kind: 'note', name };
+}
+
+// exportLinks points each image reference whose id is in images (id to ext)
+// at its file in the zip, so a markdown viewer shows it. The parentheses are
+// part of the match: a reference-style definition stays a tabnotes reference.
+export function exportLinks(content: string, images: Record<string, string>): string {
+  return content.replace(EXPORT_REF_RE, (all, id: string) =>
+    Object.hasOwn(images, id) ? `(../images/${id}.${images[id]})` : all);
+}
+
+// importLinks turns the links exportLinks wrote back into image references.
+export function importLinks(content: string): string {
+  return content.replace(IMPORT_REF_RE, (_, id: string) => `(${IMAGE_SCHEME}${id})`);
+}
+
+// dataUrlBytes decodes a stored image, or returns null for anything but a
+// valid base64 data URL with a mime type.
+export function dataUrlBytes(dataUrl: string): { mime: string; bytes: Uint8Array } | null {
+  const m = /^data:([^;,]+)(?:;[^;,]*)*;base64,/.exec(dataUrl);
+  if (m === null) return null;
+  let binary: string;
+  try {
+    binary = atob(dataUrl.slice(m[0].length));
+  } catch {
+    return null;
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return { mime: m[1], bytes };
+}
+
+// bytesDataUrl is the stored form of an image. The binary string is built in
+// chunks, as one fromCharCode call over megabytes overflows the stack.
+export function bytesDataUrl(mime: string, bytes: Uint8Array): string {
+  const chunks: string[] = [];
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + 0x8000)));
+  }
+  return `data:${mime};base64,${btoa(chunks.join(''))}`;
+}
+
+// zipEntries reads the central directory as fflate's unzipSync does, zip64
+// included, but checks the declared count against MAX_ZIP_ENTRIES before the
+// walk and every header against the end of the zip, so a small file cannot
+// drive a long loop. It locates each entry's data once, for bounded
+// streaming inflation, which unzipSync cannot do. Entries whose local header
+// and data overlap are not a zip: no tool writes them, and central entries
+// sharing one stream would inflate it once each while declaring next to
+// nothing against MAX_IMPORT_BYTES.
+export function zipEntries(zip: Uint8Array): ZipEntry[] | 'not a zip' | 'too many files' {
+  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength);
+  const fits = (at: number, n: number) => at >= 0 && at + n <= zip.length;
+  const u16 = (at: number) => view.getUint16(at, true);
+  const u32 = (at: number) => view.getUint32(at, true);
+  const u64 = (at: number) => u32(at) + u32(at + 4) * 0x100000000;
+  // the end record sits within its 22 bytes plus a comment of at most 65,535
+  let end = zip.length - 22;
+  while (end >= 0 && u32(end) !== 0x06054b50) {
+    if (zip.length - end > 65557) return 'not a zip';
+    end--;
+  }
+  if (end < 0) return 'not a zip';
+  let count = u16(end + 10);
+  let at = u32(end + 16);
+  let zip64 = false;
+  if (fits(end - 20, 20) && u32(end - 20) === 0x07064b50) {
+    const record = u64(end - 12);
+    if (fits(record, 56) && u32(record) === 0x06064b50) {
+      zip64 = true;
+      count = u64(record + 32);
+      at = u64(record + 48);
+    }
+  }
+  if (count > MAX_ZIP_ENTRIES) return 'too many files';
+  const decoder = new TextDecoder();
+  const entries: ZipEntry[] = [];
+  const spans: [number, number][] = [];
+  for (let i = 0; i < count; i++) {
+    if (!fits(at, 46) || u32(at) !== 0x02014b50) return 'not a zip';
+    const nameLength = u16(at + 28);
+    const extraLength = u16(at + 30);
+    if (!fits(at + 46, nameLength + extraLength)) return 'not a zip';
+    const raw = zip.subarray(at + 46, at + 46 + nameLength);
+    // bit 11 marks a UTF-8 name, else it is CP437, read as latin1 like fflate
+    const name = u16(at + 8) & 0x800 ? decoder.decode(raw) : String.fromCharCode(...raw);
+    let size = u32(at + 20);
+    let originalSize = u32(at + 24);
+    let local = u32(at + 42);
+    const wide = [originalSize, size, local].map((n) => n === 0xffffffff);
+    if (zip64 && wide.some(Boolean)) {
+      // the zip64 extra holds the wide fields in this order, and only those
+      let field = -1;
+      for (let x = at + 46 + nameLength; field === -1 && x + 4 <= at + 46 + nameLength + extraLength; x += 4 + u16(x + 2)) {
+        if (u16(x) === 1) field = x + 4;
+      }
+      if (field === -1 || !fits(field, 8 * wide.filter(Boolean).length)) return 'not a zip';
+      const next = () => {
+        const n = u64(field);
+        field += 8;
+        return n;
+      };
+      if (wide[0]) originalSize = next();
+      if (wide[1]) size = next();
+      if (wide[2]) local = next();
+    }
+    const start = fits(local, 30) ? local + 30 + u16(local + 26) + u16(local + 28) : -1;
+    const found = start !== -1 && fits(start, size);
+    if (found) spans.push([local, start + size]);
+    entries.push({
+      name, compression: u16(at + 10), size, originalSize,
+      data: found ? zip.subarray(start, start + size) : null,
+    });
+    at += 46 + nameLength + extraLength + u16(at + 32);
+  }
+  spans.sort((a, b) => a[0] - b[0]);
+  if (spans.some(([from], i) => i > 0 && from < spans[i - 1][1])) return 'not a zip';
+  return entries;
+}
+
+// zipFits tells whether fflate can write these entries: it writes no zip64,
+// so past 65,535 entries or 4 GB of local headers and data the counts and
+// offsets would wrap into a corrupt zip.
+export function zipFits(entries: { name: string; size: number }[]): boolean {
+  const utf8 = new TextEncoder();
+  const bytes = entries.reduce((sum, e) => sum + 30 + utf8.encode(e.name).length + e.size, 0);
+  return entries.length <= MAX_ZIP_ENTRIES && bytes <= 0xffffffff;
+}
+
+// CodeMirror keeps only \n, so a stored \r\n would be rewritten by the first edit
+const lineFeeds = (text: string) => text.replace(/\r\n?/g, '\n');
+
+// mdNote is a markdown file without a tabnotes front matter as a new
+// permanent note titled by its file name, or null for a blank file.
+export function mdNote(name: string, text: string, now: number): LiveNote | null {
+  const content = lineFeeds(text);
+  if (!content.trim()) return null;
+  const title = (name.split('/').pop() ?? '').replace(/\.md$/i, '').trim();
+  return { title: title || DEFAULT_TITLE, content, updatedAt: now, deletedAt: null };
+}
+
+// importedNote readies a parsed note file for storage. Times from the future
+// are clamped, as a note stamped ahead would win every adoption in open tabs
+// and never expire; binDays is capped for the same reason. A blank title gets
+// the default, as every stored title is a non-empty name to click and read.
+export function importedNote(note: Note, now: number): Note {
+  const clamp = (t: number) => Math.min(t, now);
+  const content = importLinks(lineFeeds(note.content));
+  const title = note.title.trim() || DEFAULT_TITLE;
+  const out: Note = note.deletedAt === null
+    ? { ...note, title, content, updatedAt: clamp(note.updatedAt) }
+    : {
+      ...note, title, content, updatedAt: clamp(note.updatedAt), deletedAt: clamp(note.deletedAt),
+      ...(note.binDays === undefined ? {} : { binDays: Math.min(note.binDays, BIN_DAYS) }),
+    };
+  return note.restoredAt === undefined ? out : { ...out, restoredAt: clamp(note.restoredAt) };
+}
+
+// planImport decides what an import writes. It never overwrites: a note whose
+// content any local note has is skipped, so importing a backup twice adds
+// nothing, and a taken id with other content becomes a copy. The first of
+// several notes with one id wins.
+export function planImport(incoming: ImportedNote[], local: LocalState, newId: () => string): ImportPlan {
+  const plan: ImportPlan = { write: {}, identical: [], duplicates: 0 };
+  const seen = new Set<string>();
+  for (const { id, note } of incoming) {
+    if (seen.has(id)) {
+      plan.duplicates++;
+      continue;
+    }
+    seen.add(id);
+    if (local.contents.has(note.content)) {
+      plan.identical.push(note);
+      continue;
+    }
+    if (!local.taken.has(id)) {
+      plan.write[id] = note;
+      continue;
+    }
+    plan.write[newId()] = { ...note, title: `${note.title} (imported)` };
+  }
+  return plan;
+}
+
+// exportSummary is the status line after an export of notes, broken being the
+// ids of images left out as unreadable.
+export function exportSummary(notes: number, broken: string[]): string {
+  const exported = `Exported ${countText(notes, 'note')}.`;
+  if (broken.length === 0) return exported;
+  return `${exported} Left out ${countText(broken.length, 'image')} that could not be read: ${broken.join(', ')}.`;
+}
+
+// importSummary is the status line after an import.
+export function importSummary(result: ImportResult): string {
+  const copies = result.copies === 0 ? '' : ` (${result.copies} as ${result.copies === 1 ? 'a copy' : 'copies'})`;
+  const images = result.images === 0 ? '' : ` and ${countText(result.images, 'image')}`;
+  const got = `${countText(result.imported, 'note')}${copies}${images}`;
+  const stopped = 'stopped' in result;
+  const parts = [!stopped
+    ? `Imported ${got}.`
+    : `Import stopped by a failed write (${String(result.stopped)}) after ${got}.`];
+  if (result.identical > 0) parts.push(`${result.identical} already present.`);
+  const reasons = Object.keys(result.rejected).sort();
+  if (reasons.length > 0) parts.push(`Skipped: ${reasons.map((r) => `${r} (${result.rejected[r]})`).join(', ')}.`);
+  if (stopped) parts.push(STORAGE_FULL_HINT);
+  return parts.join(' ');
 }

@@ -38,6 +38,15 @@
       <option value="dark">Dark</option>
     </select>
   </label>
+  <div class="field" role="group" aria-labelledby="transfer-label">
+    <span id="transfer-label">Export and import</span>
+    <div class="transfer">
+      <button id="export-notes" type="button" disabled>Export all notes</button>
+      <button id="import-notes" type="button" disabled>Import...</button>
+    </div>
+    <input id="import-file" type="file" accept=".zip,.md" multiple hidden>
+    <small id="transfer-status" class="transfer-status" aria-live="polite"></small>
+  </div>
   <script src="options.js"></script>
 </body>
 </html>

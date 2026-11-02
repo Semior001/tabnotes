@@ -1,9 +1,10 @@
 // Options page glue: edits settings.defaultTitle, the title of new notes,
 // settings.temporary, the kind of a note created by the toolbar button,
 // fontSize, the editor and preview font size of every note tab, and theme,
-// the colour mode of every page.
+// the colour mode of every page. It also exports and imports notes.
 
-import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } from '../lib/notes.ts';
+import { DEFAULT_TITLE, TITLE_HINT, exportSummary, fontSizeFrom, importSummary, themeFrom, type Settings } from '../lib/notes.ts';
+import { exportZip, importFiles, saveBlob } from '../transfer.ts';
 
 (async function () {
   const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -11,6 +12,10 @@ import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } fro
   const kindEl = $<HTMLSelectElement>('new-notes');
   const sizeEl = $<HTMLInputElement>('font-size');
   const themeEl = $<HTMLSelectElement>('theme');
+  const exportEl = $<HTMLButtonElement>('export-notes');
+  const importEl = $<HTMLButtonElement>('import-notes');
+  const fileEl = $<HTMLInputElement>('import-file');
+  const transferStatusEl = $('transfer-status');
   $('title-hint').textContent = TITLE_HINT;
 
   const warn = (what: string) => (err: unknown) => console.warn(`tabnotes: ${what}:`, err);
@@ -70,6 +75,8 @@ import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } fro
   sizeEl.disabled = false;
   if (!themeChanged) themeEl.value = themeFrom(stored.theme);
   themeEl.disabled = false;
+  exportEl.disabled = false;
+  importEl.disabled = false;
 
   // one tiny key, so every input is saved at once and nothing is lost on close.
   // settings is written whole, so both fields build it here and neither drops
@@ -92,5 +99,48 @@ import { DEFAULT_TITLE, TITLE_HINT, fontSizeFrom, themeFrom, type Settings } fro
 
   themeEl.addEventListener('change', () => {
     browser.storage.local.set({ theme: themeFrom(themeEl.value) }).catch(warn('save theme'));
+  });
+
+  // one run at a time, so an import cannot plan against storage another run
+  // is about to change; the flag also covers a picker opened before a run,
+  // whose files are refused with a message rather than dropped unseen
+  let running = false;
+  const transfer = async (what: string, run: () => Promise<string>) => {
+    if (running) {
+      transferStatusEl.textContent = `Could not ${what}: another export or import is running.`;
+      return;
+    }
+    running = true;
+    exportEl.disabled = true;
+    importEl.disabled = true;
+    transferStatusEl.textContent = '';
+    try {
+      transferStatusEl.textContent = await run();
+    } catch (err) {
+      warn(what)(err);
+      transferStatusEl.textContent = `Could not ${what}: ${err instanceof Error ? err.message : String(err)}.`;
+    }
+    running = false;
+    exportEl.disabled = false;
+    importEl.disabled = false;
+  };
+
+  exportEl.addEventListener('click', () => transfer('export notes', async () => {
+    const got = await exportZip(null);
+    saveBlob(got.blob, got.name);
+    return exportSummary(got.notes, got.broken);
+  }));
+
+  importEl.addEventListener('click', () => fileEl.click());
+  fileEl.addEventListener('change', () => {
+    const files = [...(fileEl.files ?? [])];
+    // cleared, so picking the same file again fires change
+    fileEl.value = '';
+    if (files.length === 0) return;
+    transfer('import notes', async () => {
+      const result = await importFiles(files);
+      if ('stopped' in result) warn('import notes')(result.stopped);
+      return importSummary(result);
+    });
   });
 })();

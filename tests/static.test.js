@@ -124,6 +124,10 @@ test('the build contains no network APIs', () => {
   assert.ok(files.includes('note/note.js'));
   // the scan is only worth something on the bundle holding the third-party code
   for (const name of ['highlightAuto', 'defineMIME', 'walkTokens']) assert.ok(built('note', 'note.js').includes(name), name);
+  assert.ok(built('recovery', 'recovery.js').includes('zipSync'));
+  assert.ok(built('recovery', 'recovery.js').includes('inflate_fast'));
+  // fflate's async API spawns Workers; only its sync API may reach the pages
+  for (const rel of files) assert.doesNotMatch(built(rel), /new Worker\b/, rel);
   for (const rel of files) {
     assert.doesNotMatch(built(rel), banned, rel);
   }

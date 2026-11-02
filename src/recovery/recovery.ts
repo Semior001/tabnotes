@@ -1,10 +1,12 @@
 // All notes page glue: lists every stored note split into open tabs, recently
-// closed tabs, other notes and the bin. Pure logic lives in lib/notes.ts.
+// closed tabs, other notes and the bin, and exports and imports notes. Pure
+// logic lives in lib/notes.ts.
 
 import {
-  classify, closedDaysLeftText, matches, idFromStorageKey, notesFromStorage, noteUrl, storageKey, edit, trash, restore, daysLeftText,
-  rowText, searchParts, selectRange, setTemporary, shortDate, DEFAULT_TITLE, type ClosedNotes, type Entry, type Note, type RecentEntry, type Sections, type Settings, type StopMessage,
+  classify, closedDaysLeftText, countText, matches, idFromStorageKey, notesFromStorage, noteUrl, storageKey, edit, trash, restore, daysLeftText,
+  exportSummary, importSummary, rowText, searchParts, selectRange, setTemporary, shortDate, DEFAULT_TITLE, type ClosedNotes, type Entry, type Note, type RecentEntry, type Sections, type Settings, type StopMessage,
 } from '../lib/notes.ts';
+import { exportZip, importFiles, saveBlob } from '../transfer.ts';
 
 // what became of a note a bulk action touched: gone means there was nothing
 // left to do, which is neither a success to count nor a failure to report
@@ -147,14 +149,12 @@ type Words = [string, string, string];
     return landed(browser.storage.local.set({ [key]: setTemporary(fresh, temporary, Date.now()) }), 'change note kind');
   };
 
-  const notesText = (n: number) => `${n} note${n === 1 ? '' : 's'}`;
-
   const report = (outcomes: Outcome[], [done, part, tail]: Words) => {
     const written = outcomes.filter((o) => o === 'written').length;
     const failed = outcomes.filter((o) => o === 'failed').length;
     const text = failed === 0
-      ? `${done} ${notesText(written)}${tail}`
-      : `${done} ${written} of ${notesText(written + failed)}${tail}. ${failed} could not be ${part}.`;
+      ? `${done} ${countText(written, 'note')}${tail}`
+      : `${done} ${written} of ${countText(written + failed, 'note')}${tail}. ${failed} could not be ${part}.`;
     $('status-text').textContent = text;
     $('status').hidden = written + failed === 0;
   };
@@ -199,6 +199,38 @@ type Words = [string, string, string];
     if (busy || !confirm(question)) return Promise.resolve();
     return bulk(items, removeItem, DELETED, () => []);
   };
+
+  // Export and import share busy with bulk runs, so an import cannot plan
+  // against storage a run is changing, and they end a pending Undo like a run.
+  // An export keeps the selection: it changes nothing. Imported notes appear
+  // through storage.onChanged. Refused while busy with a message, as a picked
+  // file would otherwise be dropped unseen.
+  const transfer = async (what: string, run: () => Promise<string>) => {
+    if (busy) {
+      $('status-text').textContent = `Could not ${what}: another action is running.`;
+      $('status').hidden = false;
+      return;
+    }
+    busy = true;
+    undo = [];
+    $('status-undo').hidden = true;
+    let text: string;
+    try {
+      text = await run();
+    } catch (err) {
+      warn(what)(err);
+      text = `Could not ${what}: ${err instanceof Error ? err.message : String(err)}.`;
+    }
+    busy = false;
+    $('status-text').textContent = text;
+    $('status').hidden = false;
+  };
+
+  const exportNotes = (ids: string[] | null) => transfer('export notes', async () => {
+    const got = await exportZip(ids);
+    saveBlob(got.blob, got.name);
+    return exportSummary(got.notes, got.broken);
+  });
 
   const deleteQuestion = (items: Entry[]) =>
     items.length === 1 ? `Delete "${texts.get(items[0].id)?.name}" forever?` : `Delete ${items.length} notes forever?`;
@@ -451,6 +483,21 @@ type Words = [string, string, string];
   $('empty-bin').addEventListener('click', () => {
     const items = groups.bin;
     deleteItems(items, `Delete ${items.length === 1 ? 'the note' : `all ${items.length} notes`} in the Bin forever?`).then(() => refresh());
+  });
+  $('export-all').addEventListener('click', () => exportNotes(null));
+  $('bar-export').addEventListener('click', () => exportNotes(selectedItems().map((item) => item.id)));
+  const fileEl = $<HTMLInputElement>('import-file');
+  $('import-notes').addEventListener('click', () => fileEl.click());
+  fileEl.addEventListener('change', () => {
+    const files = [...(fileEl.files ?? [])];
+    // cleared, so picking the same file again fires change
+    fileEl.value = '';
+    if (files.length === 0) return;
+    transfer('import notes', async () => {
+      const result = await importFiles(files);
+      if ('stopped' in result) warn('import notes')(result.stopped);
+      return importSummary(result);
+    });
   });
   $('status-undo').addEventListener('click', () => undoMove().then(() => refresh()));
   $('bar-clear').addEventListener('click', () => {

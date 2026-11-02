@@ -5,8 +5,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { unzipSync, zipSync } = require('fflate');
 const { bundle } = require('./bundle.js');
-const { TITLE_HINT } = require('../src/lib/notes.ts');
+const { TITLE_HINT, importSummary, noteFile } = require('../src/lib/notes.ts');
 
 const root = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
@@ -24,6 +25,10 @@ function element(attrs = {}) {
     dispatch(type) {
       for (const fn of listeners[type] || []) fn({ type });
     },
+    clicks: 0,
+    click() {
+      this.clicks++;
+    },
   };
 }
 
@@ -36,8 +41,10 @@ const settle = () => new Promise((r) => setImmediate(r));
 // and browser API and resolves once the page's async setup has finished. The
 // initial element state mirrors options.html, which the 'options.html' test
 // asserts. storage is read live and set merges into it; holdLoad keeps the
-// first get pending until releaseLoad is called.
-async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = false } = {}) {
+// first get pending until releaseLoad is called, holdKeys the first getKeys
+// until releaseKeys. The <a download> elements the page creates are in
+// anchors, the Blobs given to URL.createObjectURL in blobs.
+async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = false, holdKeys = false } = {}) {
   const els = {
     error: element({ hidden: true }),
     'default-title': element({ disabled: true }),
@@ -46,8 +53,34 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
     'font-size': element({ disabled: true }),
     theme: element({ disabled: true, value: 'system' }),
     'all-notes': element(),
+    'export-notes': element({ disabled: true }),
+    'import-notes': element({ disabled: true }),
+    'import-file': element({ hidden: true, files: [] }),
+    'transfer-status': element({ textContent: '' }),
   };
-  const doc = { getElementById: (id) => els[id] };
+  const anchors = [];
+  const blobs = [];
+  const body = { children: [], append(...nodes) { this.children.push(...nodes); } };
+  const doc = {
+    getElementById: (id) => els[id],
+    body,
+    createElement: (tag) => {
+      const el = {
+        tagName: tag.toUpperCase(),
+        clicked: [],
+        click() {
+          this.clicked.push({ href: this.href, download: this.download, attached: body.children.includes(this) });
+        },
+        remove() {
+          body.children = body.children.filter((c) => c !== this);
+        },
+      };
+      anchors.push(el);
+      return el;
+    },
+  };
+  let releaseKeys = () => {};
+  let heldKeys = holdKeys ? new Promise((r) => (releaseKeys = r)) : null;
   const changeListeners = [];
   let releaseLoad = () => {};
   let held = holdLoad ? new Promise((r) => (releaseLoad = r)) : null;
@@ -62,6 +95,21 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
   const ctx = vm.createContext({
     console: { warn: (...a) => warnings.push(a) },
     document: doc,
+    Blob,
+    crypto,
+    TextEncoder,
+    TextDecoder,
+    atob,
+    btoa,
+    setTimeout: () => {},
+    URL: class extends URL {
+      static createObjectURL(blob) {
+        blobs.push(blob);
+        return `blob:moz-extension://uuid/${blobs.length}`;
+      }
+
+      static revokeObjectURL() {}
+    },
     browser: {
       runtime: { getURL: (p) => `moz-extension://uuid/${p}` },
       windows: { update: (...a) => call('windows.update', ...a) },
@@ -75,6 +123,13 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
       },
       storage: {
         local: {
+          getKeys: async () => {
+            const wait = heldKeys;
+            heldKeys = null;
+            await call('storage.local.getKeys');
+            if (wait) await wait;
+            return Object.keys(storage);
+          },
           get: async (keys) => {
             const wait = held;
             held = null;
@@ -122,7 +177,15 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
     for (const fn of changeListeners) fn(structuredClone(changes), area);
   };
   const writes = () => calls.filter(([name]) => name === 'storage.local.set');
-  return { els, input, size, theme, kind, storage, warnings, calls, writes, type, enterSize, pickTheme, pickKind, change, releaseLoad };
+  // pick selects files in the hidden input the way the file picker does
+  const pick = (files) => {
+    els['import-file'].files = files;
+    els['import-file'].dispatch('change');
+  };
+  return {
+    els, input, size, theme, kind, storage, warnings, calls, writes, type, enterSize, pickTheme, pickKind, change, releaseLoad,
+    anchors, blobs, pick, releaseKeys,
+  };
 }
 
 test('options.html starts with the harness state', () => {
@@ -141,6 +204,10 @@ test('options.html starts with the harness state', () => {
   assert.match(html, /toolbar button<\/span>\s*<select id="new-notes" disabled>/);
   assert.deepEqual(options('new-notes'), [['permanent', 'Permanent'], ['temporary', 'Temporary']]);
   assert.match(html, /id="all-notes"[^>]*>All notes</);
+  assert.match(html, /<button id="export-notes" type="button" disabled>Export all notes<\/button>/);
+  assert.match(html, /<button id="import-notes" type="button" disabled>Import\.\.\.<\/button>/);
+  assert.match(html, /<input id="import-file" type="file" accept="\.zip,\.md" multiple hidden>/);
+  assert.match(html, /<small id="transfer-status"[^>]*><\/small>/);
   assert.match(html, /Default title for new notes/);
   // the hint sits in .field for the spacing but outside the label, so it is not
   // part of the input's name and a click on it does not focus the input; its
@@ -572,5 +639,174 @@ test('options kind of new notes', async (t) => {
     assert.equal(kind.value, 'permanent');
     pickKind('temporary');
     assert.deepEqual(writes(), []);
+  });
+});
+
+test('options export and import', async (t) => {
+  const NOW = Date.UTC(2026, 10, 2);
+  const ID1 = '0f8fad5b-d9cb-469f-a165-70867728950e';
+  const ID2 = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+  const IMG = '886313e1-3b8a-4372-9b90-0c9aee199e5d';
+  const notes = () => ({
+    [`note:${ID1}`]: { title: 'Shopping list', content: 'milk', updatedAt: NOW, deletedAt: null },
+    [`note:${ID2}`]: { title: 'Old draft', content: 'gone', updatedAt: NOW - 2, deletedAt: NOW - 1 },
+  });
+  const files = async (blob) => Object.keys(unzipSync(new Uint8Array(await blob.arrayBuffer())));
+  const exportEl = (els) => els['export-notes'];
+  const importEl = (els) => els['import-notes'];
+  const backup = () => new File([zipSync({
+    'permanent/Shopping list.md': new TextEncoder().encode(noteFile(ID1, notes()[`note:${ID1}`], 'milk')),
+  })], 'tabnotes-2026-11-02.zip');
+
+  await t.test('the buttons are enabled after a successful load', async () => {
+    const { els } = await runOptions();
+    assert.equal(exportEl(els).disabled, false);
+    assert.equal(importEl(els).disabled, false);
+  });
+
+  await t.test('a failed load keeps the buttons disabled', async () => {
+    const { els } = await runOptions({ reject: { 'storage.local.get': true } });
+    assert.equal(exportEl(els).disabled, true);
+    assert.equal(importEl(els).disabled, true);
+  });
+
+  await t.test('export downloads a zip of all notes through <a download>', async () => {
+    const { els, anchors, blobs, warnings } = await runOptions({ storage: { ...notes(), fontSize: 16 } });
+    exportEl(els).dispatch('click');
+    await settle();
+    assert.equal(anchors.length, 1);
+    assert.equal(anchors[0].clicked.length, 1);
+    assert.equal(anchors[0].clicked[0].attached, true);
+    assert.match(anchors[0].clicked[0].download, /^tabnotes-\d{4}-\d{2}-\d{2}\.zip$/);
+    assert.equal(anchors[0].clicked[0].href, 'blob:moz-extension://uuid/1');
+    assert.deepEqual(await files(blobs[0]), ['bin/Old draft.md', 'permanent/Shopping list.md']);
+    assert.equal(els['transfer-status'].textContent, 'Exported 2 notes.');
+    assert.equal(exportEl(els).disabled, false);
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('export names the images it left out', async () => {
+    const storage = notes();
+    storage[`note:${ID1}`].content = `![x](tabnotes-image:${IMG})`;
+    storage[`image:${IMG}`] = { dataUrl: 'data:text/plain;base64,AAAA' };
+    const { els } = await runOptions({ storage });
+    exportEl(els).dispatch('click');
+    await settle();
+    assert.equal(els['transfer-status'].textContent, `Exported 2 notes. Left out 1 image that could not be read: ${IMG}.`);
+  });
+
+  await t.test('the buttons are disabled during a run and a pick during it is refused with a message', async () => {
+    const { els, calls, releaseKeys, anchors, pick } = await runOptions({ storage: notes(), holdKeys: true });
+    exportEl(els).dispatch('click');
+    await settle();
+    assert.equal(exportEl(els).disabled, true);
+    assert.equal(importEl(els).disabled, true);
+    // a disabled button fires no click, but a picker opened before the run
+    // can still deliver files
+    pick([new File(['x'], 'x.md')]);
+    await settle();
+    assert.equal(els['transfer-status'].textContent, 'Could not import notes: another export or import is running.');
+    releaseKeys();
+    await settle();
+    assert.equal(calls.filter(([name]) => name === 'storage.local.getKeys').length, 1);
+    assert.equal(anchors.length, 1);
+    assert.equal(exportEl(els).disabled, false);
+    assert.equal(importEl(els).disabled, false);
+  });
+
+  await t.test('Import opens the file picker', async () => {
+    const { els } = await runOptions();
+    importEl(els).dispatch('click');
+    assert.equal(els['import-file'].clicks, 1);
+  });
+
+  await t.test('picked files are imported and the summary shown', async () => {
+    const { els, storage, pick, warnings } = await runOptions();
+    pick([backup(), new File(['x'], 'notes.txt')]);
+    await settle();
+    assert.deepEqual(storage[`note:${ID1}`], notes()[`note:${ID1}`]);
+    assert.equal(
+      els['transfer-status'].textContent,
+      importSummary({ imported: 1, images: 0, identical: 0, copies: 0, rejected: { 'unsupported file': 1 } }),
+    );
+    // cleared, so picking the same file again fires change
+    assert.equal(els['import-file'].value, '');
+    assert.equal(importEl(els).disabled, false);
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('the buttons are disabled during an import', async () => {
+    const { els, pick, releaseKeys } = await runOptions({ holdKeys: true });
+    pick([backup()]);
+    await settle();
+    assert.equal(exportEl(els).disabled, true);
+    assert.equal(importEl(els).disabled, true);
+    releaseKeys();
+    await settle();
+    assert.equal(exportEl(els).disabled, false);
+    assert.equal(importEl(els).disabled, false);
+  });
+
+  await t.test('a pick with no files does nothing', async () => {
+    const { els, calls, pick } = await runOptions();
+    calls.length = 0;
+    pick([]);
+    await settle();
+    assert.deepEqual(calls, []);
+    assert.equal(els['transfer-status'].textContent, '');
+  });
+
+  await t.test('a failed export shows a message, logs and saves nothing', async () => {
+    const { els, anchors, warnings } = await runOptions({ storage: notes(), reject: { 'storage.local.getKeys': true } });
+    exportEl(els).dispatch('click');
+    await settle();
+    assert.equal(anchors.length, 0);
+    assert.equal(els['transfer-status'].textContent, 'Could not export notes: list keys.');
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: export notes:']);
+    assert.equal(exportEl(els).disabled, false);
+  });
+
+  await t.test('a new run clears the status of the last one', async () => {
+    const { els, pick } = await runOptions({ storage: notes() });
+    exportEl(els).dispatch('click');
+    await settle();
+    assert.equal(els['transfer-status'].textContent, 'Exported 2 notes.');
+    pick([backup()]);
+    assert.equal(els['transfer-status'].textContent, '');
+    await settle();
+    assert.match(els['transfer-status'].textContent, /^Imported/);
+  });
+
+  await t.test('a failed note write shows the summary and logs the error', async () => {
+    const { els, pick, warnings } = await runOptions({ reject: { 'storage.local.set': true } });
+    pick([backup()]);
+    await settle();
+    const stopped = 'Error: storage.local.set rejected';
+    // the error itself is logged, so the console keeps its stack
+    assert.equal(
+      els['transfer-status'].textContent,
+      importSummary({ imported: 0, images: 0, identical: 0, copies: 0, rejected: {}, stopped }),
+    );
+    assert.deepEqual(warnings.map(([what, err]) => [what, typeof err, String(err)]), [['tabnotes: import notes:', 'object', stopped]]);
+  });
+
+  await t.test('a rejection that is no Error shows its text', async () => {
+    const { els, pick, warnings } = await runOptions();
+    // a name getter throwing a string is the one way to reach it here, as
+    // transfer.ts wraps every browser.* failure in an Error
+    pick([{ get name() { throw 'boom'; } }]);
+    await settle();
+    assert.equal(els['transfer-status'].textContent, 'Could not import notes: boom.');
+    assert.deepEqual(warnings, [['tabnotes: import notes:', 'boom']]);
+  });
+
+  await t.test('a failed import shows a message and logs', async () => {
+    const { els, pick, warnings, writes } = await runOptions({ reject: { 'storage.local.getKeys': true } });
+    pick([backup()]);
+    await settle();
+    assert.equal(els['transfer-status'].textContent, 'Could not import notes: list keys.');
+    assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: import notes:']);
+    assert.deepEqual(writes(), []);
+    assert.equal(importEl(els).disabled, false);
   });
 });
