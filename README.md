@@ -23,6 +23,7 @@ Markdown notes that live in your Firefox tabs. Click the toolbar button and a no
 - **All notes.** Search, reopen and tidy up every note in one place, including tabs you closed.
 - **A bin.** Deleted notes stay for 30 days before they are removed, 7 if a temporary note moved there by itself.
 - **Permanent and temporary notes.** A temporary note you have closed moves to the Bin after 30 days. A permanent note stays until you delete it.
+- **Export and import.** Save all notes, or the ones you pick, with their images to a `.zip` of markdown files you can read without the extension, and bring them back.
 - **Light and dark.** Follow your system or pick one.
 - **Private.** Notes stay in this Firefox on this device. The extension makes no network requests.
 
@@ -91,7 +92,7 @@ Open **All notes** from the header of any note. Notes are grouped into Open, Rec
   <img alt="The All notes page with sections for open, recently closed, other and binned notes" src="docs/screenshots/all-notes-light.png">
 </picture>
 
-Press `/` to search. Tick rows, or Shift-click a range, to move several notes to the Bin at once or to change their kind. "Undo" brings moved notes back, but not their tabs.
+Press `/` to search. Tick rows, or Shift-click a range, to move several notes to the Bin at once, to change their kind or to export them. "Undo" brings moved notes back, but not their tabs.
 
 ### Delete and restore
 
@@ -105,9 +106,35 @@ The toolbar button creates the kind chosen in Settings, permanent by default. To
 
 All notes marks temporary notes, and shows the days left on the ones that are closed. A temporary note restored from the Bin stays temporary, and its 30 days start again. "Move to Bin" keeps a note for 30 days, whatever its kind.
 
+### Export and import
+
+"Export all notes" in Settings, or "Export all" in All notes, saves every note and its images to one file, `tabnotes-<date>.zip`, in your downloads. To save only some notes, tick them in All notes and click "Export".
+
+The zip reads without the extension:
+
+```
+tabnotes-2026-11-02.zip
+├── permanent/
+│   └── Shopping list.md
+├── temporary/
+│   └── Scratch.md
+├── bin/
+│   └── Old draft.md
+└── images/
+    └── <id>.png
+```
+
+Each note is a markdown file named by its title, or by its first heading or line if it kept the default title, in the folder of its kind, or in `bin/` if it is in the Bin. Notes link to their images in `images/`, so a markdown viewer shows them. A short block at the top of each file holds the note's id, title, times and kind, which an import reads back; moving a file to another folder changes nothing.
+
+"Import..." in Settings or All notes takes tabnotes zips and `.md` files, several at once. A `.md` file without that block, from another app for example, becomes a new permanent note titled by its file name. A note file or an image can be up to 25 MB. A zip you unpacked and zipped again, also inside one more folder, imports like the original.
+
+A file that is not UTF-8 text, or whose block at the top is damaged, is skipped. That includes a block another app rewrote, for example with the quotes around the id dropped, so keep them when you edit a file. A zip over 1 GB or with more than 65,535 files is skipped whole, and once the notes and images taken from a zip pass 1 GB unpacked, the rest of it is skipped.
+
+Import never overwrites a note. A note whose text is already stored, under any title or in the Bin, is skipped, so importing the same zip twice adds nothing. A note whose id belongs to a different note comes in as a copy titled `<title> (imported)`. Imported notes keep their kind and Bin state, so a note that has been in the Bin longer than its days is removed at the next purge. The status line says what came in, what was already there and what was skipped, and why.
+
 ### Settings
 
-Choose the default title for new notes, the kind of note the toolbar button creates, the font size for all notes, and the theme. The default title can hold the same variables and functions as a rename, filled in when a note is created.
+Choose the default title for new notes, the kind of note the toolbar button creates, the font size for all notes, and the theme. Export and import are here too. The default title can hold the same variables and functions as a rename, filled in when a note is created.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
@@ -134,7 +161,7 @@ Use `Cmd` instead of `Ctrl` on Mac.
 
 ## Good to know
 
-- **Removing the extension deletes your notes.** Notes are stored inside the extension, and there is no sync or export. They do not move to another device or Firefox profile.
+- **Removing the extension deletes your notes.** Notes are stored inside the extension, and there is no sync. Export them first to keep them, or to move them to another device or Firefox profile.
 - Remote images, such as `![](https://...)`, do not load. Add the image to the note instead.
 - HTML in a note is shown as plain text.
 - A deleted image still takes up space for at least 7 days, so you can undo the change.
