@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Generates icons/icon-{16,48,96}.png: a notepad glyph drawn in normalized
+// Generates icons/icon-{16,32,48,96,128}.png: a notepad glyph drawn in normalized
 // coordinates and supersampled for anti-aliasing. No dependencies beyond node.
 'use strict';
 
@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 
-const SIZES = [16, 48, 96];
+const SIZES = [16, 32, 48, 96, 128];
 const SAMPLES = 4; // per axis
 
 const BORDER = [52, 73, 94];

@@ -24,7 +24,7 @@ const installedVersion = (name) => JSON.parse(fs.readFileSync(path.join(root, 'n
 test('build writes the unpacked extension into a new outdir', (t) => {
   const outdir = path.join(tempDir(t), 'nested', 'dist');
   build(outdir);
-  const files = ['manifest.json', 'background.js', 'theme.js', 'icons/icon-48.png', 'vendor/mermaid.min.js'];
+  const files = ['manifest.json', '_locales/en/messages.json', 'background.js', 'theme.js', 'icons/icon-48.png', 'vendor/mermaid.min.js'];
   for (const page of pages) files.push(page, page.replace('.html', '.js'), page.replace('.html', '.css'));
   for (const rel of files) assert.ok(fs.existsSync(path.join(outdir, rel)), rel);
   assert.equal(fs.existsSync(path.join(outdir, 'lib')), false);
@@ -52,7 +52,7 @@ test('the build has every file the manifest and pages name, all local', () => {
 // a list of what may ship, so anything new at the top level has to be added here
 test('the build holds only the package files', () => {
   assert.deepEqual(fs.readdirSync(dist).sort(),
-    ['THIRD_PARTY_LICENSES.txt', 'background.js', 'icons', 'manifest.json', 'note', 'options', 'recovery', 'theme.js', 'vendor']);
+    ['THIRD_PARTY_LICENSES.txt', '_locales', 'background.js', 'icons', 'manifest.json', 'note', 'options', 'recovery', 'theme.js', 'vendor']);
   const names = fs.readdirSync(dist, { recursive: true }).flatMap((rel) => rel.split(path.sep));
   for (const name of ['tests', 'docs', 'src', '.env', 'node_modules']) assert.ok(!names.includes(name), name);
 });
@@ -276,7 +276,7 @@ test('build refuses a version that is not X.Y.Z, before it touches outdir', asyn
 // a copy of the sources, as scripts/build.js always writes to the dist/ next to it
 test('scripts/build.js takes the version from RELEASE_VERSION', async (t) => {
   const source = tempDir(t);
-  for (const rel of ['scripts', 'src', 'icons', 'manifest.json', 'package-lock.json']) {
+  for (const rel of ['scripts', 'src', 'icons', '_locales', 'manifest.json', 'package-lock.json']) {
     fs.cpSync(path.join(root, rel), path.join(source, rel), { recursive: true });
   }
   fs.symlinkSync(path.join(root, 'node_modules'), path.join(source, 'node_modules'));

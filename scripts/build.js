@@ -80,7 +80,7 @@ function build(outdir, version) {
   const manifest = fs.readFileSync(path.join(root, 'manifest.json'), 'utf8');
   const stamped = version ? JSON.stringify({ ...JSON.parse(manifest), version }, null, 2) : manifest;
   fs.writeFileSync(path.join(outdir, 'manifest.json'), stamped);
-  fs.cpSync(path.join(root, 'icons'), path.join(outdir, 'icons'), { recursive: true });
+  for (const dir of ['icons', '_locales']) fs.cpSync(path.join(root, dir), path.join(outdir, dir), { recursive: true });
   for (const page of pages) fs.copyFileSync(path.join(root, 'src', page), path.join(outdir, page));
   // the note page loads mermaid itself on the first diagram, so it is not bundled
   fs.mkdirSync(path.join(outdir, 'vendor'));

@@ -147,6 +147,36 @@ test('manifest icons are PNGs', () => {
   }
 });
 
+// AMO wants a 128px icon for the listing, and the pages name their tab icons in
+// <head>, so a page without them shows the generic one
+test('the manifest has a 128px icon and every page a tab icon', () => {
+  assert.equal(manifest.icons['128'], 'icons/icon-128.png');
+  const png = (rel) => {
+    const buf = fs.readFileSync(path.join(root, rel));
+    return [buf.readUInt32BE(16), buf.readUInt32BE(20)];
+  };
+  for (const [size, rel] of Object.entries(manifest.icons)) {
+    assert.deepEqual(png(rel), [Number(size), Number(size)], rel);
+  }
+  for (const page of pages) {
+    const head = built(page).match(/<head>([\s\S]*?)<\/head>/)[1];
+    for (const size of [16, 32]) {
+      assert.match(head, new RegExp(`<link rel="icon" type="image/png" sizes="${size}x${size}" href="\\.\\./icons/icon-${size}\\.png">`), page);
+    }
+  }
+});
+
+// every __MSG_ in the manifest has a message in the default locale, or Firefox
+// shows the placeholder itself
+test('manifest strings come from the default locale', () => {
+  assert.equal(manifest.default_locale, 'en');
+  const messages = JSON.parse(read('_locales', 'en', 'messages.json'));
+  const keys = [...JSON.stringify(manifest).matchAll(/__MSG_(\w+)__/g)].map((m) => m[1]);
+  assert.deepEqual(keys.sort(), ['browserActionTitle', 'extensionDescription', 'extensionName']);
+  for (const key of keys) assert.ok(messages[key]?.message, key);
+  assert.equal(messages.extensionName.message, 'tabnotes');
+});
+
 // the toolbar button opens a note tab via browserAction.onClicked, which
 // fires only without a popup
 test('manifest has a background script, an options page and no popup', () => {

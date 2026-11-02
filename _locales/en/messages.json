@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "tabnotes",
+    "description": "Name of the extension. A product name, usually not translated."
+  },
+  "extensionDescription": {
+    "message": "Markdown notes as tabs, nested under the tab they were opened from.",
+    "description": "Description of the extension in about:addons and on addons.mozilla.org."
+  },
+  "browserActionTitle": {
+    "message": "New note",
+    "description": "Tooltip of the toolbar button, which opens a new note tab."
+  }
+}
