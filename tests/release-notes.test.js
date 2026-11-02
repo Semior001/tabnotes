@@ -171,7 +171,7 @@ ${claudeSource}
     return p;
   };
   // absent files unless given, as when the gh step failed
-  const run = (tag, { prs, releases, extraEnv = {} } = {}) =>
+  const run = (tag, { prs, releases, end, extraEnv = {} } = {}) =>
     spawnSync(
       process.execPath,
       [
@@ -180,6 +180,7 @@ ${claudeSource}
         prs === undefined ? path.join(root, 'no-prs.json') : file('prs.json', prs),
         releases === undefined ? path.join(root, 'no-releases.json') : file('releases.json', releases),
         out,
+        ...(end === undefined ? [] : [end]),
       ],
       { cwd: repo, env: { ...env, ...extraEnv }, encoding: 'utf8' },
     );
@@ -447,8 +448,20 @@ test('a bad tag or missing git history fails and leaves no notes file', (t) => {
   assert.equal(f.wrote(), false);
 });
 
-test('the script takes exactly its four arguments', () => {
-  for (const args of [[], ['v0.1.0'], ['v0.1.0', 'a', 'b'], ['v0.1.0', 'a', 'b', 'c', 'd']]) {
+test('a preview ends the range at the given commit, for a tag not made yet', (t) => {
+  const f = fixture(t);
+  f.commit('feat: released');
+  f.git('tag', 'v0.1.0');
+  f.commit('fix: unreleased');
+
+  const r = f.run('v0.2.0', { end: 'HEAD', releases: releases('v0.1.0') });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(f.notes(), '### Fixes\n\n- unreleased\n');
+  assert.equal(f.git('tag', '--list'), 'v0.1.0');
+});
+
+test('the script takes its four arguments and an optional end', () => {
+  for (const args of [[], ['v0.1.0'], ['v0.1.0', 'a', 'b'], ['v0.1.0', 'a', 'b', 'c', 'd', 'e']]) {
     const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: os.tmpdir(), encoding: 'utf8' });
     assert.equal(r.status, 1, args.join(' '));
     assert.match(r.stderr, /usage:/);

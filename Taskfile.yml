@@ -69,3 +69,23 @@ tasks:
       - mkdir -p {{.ARTIFACTS}}
       - git archive --format=zip HEAD -o {{.SOURCE_ZIP}}
       - '{{.WEB_EXT}} sign {{.SOURCE}} --artifacts-dir {{.ARTIFACTS}} --channel unlisted --upload-source-code {{.SOURCE_ZIP}}'
+
+  release:preview:
+    desc: Print the notes the next release would get, for HEAD as TAG (task release:preview TAG=vX.Y.Z)
+    silent: true
+    requires:
+      vars: [TAG]
+    # the same inputs as the release workflow, but up to HEAD, as the tag does not exist yet; Claude
+    # writes them only with CLAUDE_CODE_OAUTH_TOKEN set, otherwise they are the fallback notes
+    env:
+      TAG: '{{.TAG}}'
+    cmds:
+      - |
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        gh pr list --state merged --base main --limit 40 --json number,title,body,mergeCommit,commits \
+          > "$tmp/prs.json" || echo 'release:preview: listing merged PRs failed, notes go without them' >&2
+        gh release list --exclude-drafts --limit 1000 --json tagName \
+          > "$tmp/releases.json" || echo 'release:preview: listing releases failed, notes use the highest lower tag' >&2
+        node scripts/release-notes.js "$TAG" "$tmp/prs.json" "$tmp/releases.json" "$tmp/notes.md" HEAD
+        cat "$tmp/notes.md"

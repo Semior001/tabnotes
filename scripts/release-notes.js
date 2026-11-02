@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Writes the notes of a GitHub release: from Claude Code when CLAUDE_CODE_OAUTH_TOKEN works,
 // otherwise from conventional commits and PR titles. Run by the release workflow as
-//   node scripts/release-notes.js <tag> <prs.json> <releases.json> <out.md>
-// The two JSON files are `gh pr list` and `gh release list` output and may be missing.
+//   node scripts/release-notes.js <tag> <prs.json> <releases.json> <out.md> [end]
+// The two JSON files are `gh pr list` and `gh release list` output and may be missing. end is the
+// last commit of the range, the tag by default; `task release:preview` passes HEAD before tagging.
 'use strict';
 
 const fs = require('node:fs');
@@ -142,8 +143,10 @@ function git(...args) {
 
 function main() {
   const args = process.argv.slice(2);
-  if (args.length !== 4) throw new Error('usage: <tag> <prs.json> <releases.json> <out.md>');
-  const [tag, prsFile, releasesFile, outFile] = args;
+  if (args.length < 4 || args.length > 5) {
+    throw new Error('usage: <tag> <prs.json> <releases.json> <out.md> [end]');
+  }
+  const [tag, prsFile, releasesFile, outFile, end = `refs/tags/${tag}`] = args;
   if (!TAG.test(tag)) throw new Error(`invalid tag: ${tag}`);
 
   const released = readArray(releasesFile);
@@ -152,7 +155,7 @@ function main() {
     git('tag', '--list', 'v[0-9]*').split('\n'),
     released && new Set(released.map((r) => r.tagName)),
   );
-  const range = [previous && `refs/tags/${previous}..`, `refs/tags/${tag}`].join('');
+  const range = [previous && `refs/tags/${previous}..`, end].join('');
   const lines = (text) => text.split('\n').filter(Boolean);
 
   const { prs, subjects } = matchPRs(
