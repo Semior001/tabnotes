@@ -36,6 +36,8 @@ You need Firefox 143 or newer.
 
 Updates are not automatic: install each new version the same way. Your notes stay in place.
 
+The first install opens a welcome note: a regular note that walks through the editor, the preview, renaming, note kinds, All notes and how to pin the toolbar button. Edit or delete it like any other note; "Open the welcome note" in Settings brings back a fresh copy.
+
 The extension asks for these permissions:
 
 | Permission | Why |
@@ -134,7 +136,7 @@ Import never overwrites a note. A note whose text is already stored, under any t
 
 ### Settings
 
-Choose the default title for new notes, the kind of note the toolbar button creates, the font size for all notes, and the theme. Export and import are here too. The default title can hold the same variables and functions as a rename, filled in when a note is created.
+Choose the default title for new notes, the kind of note the toolbar button creates, the font size for all notes, and the theme. Export and import are here too, and "Open the welcome note", which opens a new copy of the welcome note and leaves any earlier one as it is. The default title can hold the same variables and functions as a rename, filled in when a note is created.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/settings-dark.png">
