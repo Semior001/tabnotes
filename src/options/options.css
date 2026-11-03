@@ -25,11 +25,13 @@ body {
 }
 
 .title-hint,
-.transfer-status {
+.transfer-status,
+.welcome-status {
   color: var(--color-muted);
 }
 
-.transfer {
+.transfer,
+.welcome {
   display: flex;
   gap: var(--space-2);
 }

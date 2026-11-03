@@ -1,9 +1,13 @@
 // Options page glue: edits settings.defaultTitle, the title of new notes,
 // settings.temporary, the kind of a note created by the toolbar button,
 // fontSize, the editor and preview font size of every note tab, and theme,
-// the colour mode of every page. It also exports and imports notes.
+// the colour mode of every page. It also exports and imports notes, and
+// opens a fresh copy of the welcome note.
 
-import { DEFAULT_TITLE, TITLE_HINT, exportSummary, fontSizeFrom, importSummary, themeFrom, type Settings } from '../lib/notes.ts';
+import {
+  DEFAULT_TITLE, TITLE_HINT, exportSummary, fontSizeFrom, importSummary, noteUrl, storageKey, themeFrom, welcomeNote,
+  type Settings,
+} from '../lib/notes.ts';
 import { exportZip, importFiles, saveBlob } from '../transfer.ts';
 
 (async function () {
@@ -37,6 +41,25 @@ import { exportZip, importFiles, saveBlob } from '../transfer.ts';
       browser.tabs.update(tab.id!, { active: true }).catch(warn('focus recovery tab')),
       browser.windows.update(tab.windowId!, { focused: true }).catch(warn('focus recovery window')),
     ]);
+  });
+
+  // wired before the load and never disabled, as it reads no setting. Each
+  // click writes a new note, never touching an earlier copy; the note is
+  // written first, as a tab opened on a failed write would show an empty note
+  const welcomeStatusEl = $('welcome-status');
+  $('welcome-note').addEventListener('click', async () => {
+    welcomeStatusEl.textContent = '';
+    const id = crypto.randomUUID();
+    const failed = 'Could not open the welcome note.';
+    const wrote = await browser.storage.local.set({ [storageKey(id)]: welcomeNote(Date.now()) })
+      .then(() => true).catch(warnOr('write welcome note', false));
+    if (!wrote) {
+      welcomeStatusEl.textContent = failed;
+      return;
+    }
+    const url = noteUrl(browser.runtime.getURL('note/note.html'), id);
+    const opened = await browser.tabs.create({ url }).then(() => true).catch(warnOr('open welcome note', false));
+    if (!opened) welcomeStatusEl.textContent = failed;
   });
 
   // note tabs change fontSize with shortcuts. Registered before the load so a

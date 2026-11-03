@@ -7,7 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { unzipSync, zipSync } = require('fflate');
 const { bundle } = require('./bundle.js');
-const { TITLE_HINT, importSummary, noteFile } = require('../src/lib/notes.ts');
+const { TITLE_HINT, importSummary, noteFile, noteUrl, welcomeNote } = require('../src/lib/notes.ts');
 
 const root = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(root, ...p), 'utf8');
@@ -57,6 +57,8 @@ async function runOptions({ storage = {}, reject = {}, allTabs = [], holdLoad = 
     'import-notes': element({ disabled: true }),
     'import-file': element({ hidden: true, files: [] }),
     'transfer-status': element({ textContent: '' }),
+    'welcome-note': element(),
+    'welcome-status': element({ textContent: '' }),
   };
   const anchors = [];
   const blobs = [];
@@ -209,6 +211,9 @@ test('options.html starts with the harness state', () => {
   assert.match(html, /<input id="import-file" type="file" accept="\.zip,\.md" multiple hidden>/);
   assert.match(html, /<small id="transfer-status"[^>]*><\/small>/);
   assert.match(html, /Default title for new notes/);
+  // the welcome button reads no setting, so it is never disabled
+  assert.match(html, /<div class="field">\s*<span>Welcome note<\/span>\s*<div class="welcome">\s*<button id="welcome-note" type="button">Open the welcome note<\/button>\s*<\/div>\s*<small id="welcome-status" class="welcome-status" aria-live="polite"><\/small>\s*<\/div>/);
+  assert.doesNotMatch(html.match(/<button id="welcome-note"[^>]*>/)[0], /disabled/);
   // the hint sits in .field for the spacing but outside the label, so it is not
   // part of the input's name and a click on it does not focus the input; its
   // text stays in code
@@ -808,5 +813,117 @@ test('options export and import', async (t) => {
     assert.deepEqual(warnings.map((w) => w[0]), ['tabnotes: import notes:']);
     assert.deepEqual(writes(), []);
     assert.equal(importEl(els).disabled, false);
+  });
+});
+
+test('options welcome note', async (t) => {
+  const noteBase = 'moz-extension://uuid/note/note.html';
+  // opened returns the ids of the note keys written and the tabs opened, in
+  // call order, and checks every written note is the welcome note
+  const opened = (calls) => calls.flatMap(([name, arg]) => {
+    if (name === 'storage.local.set') {
+      const [[key, note]] = Object.entries(arg);
+      assert.deepEqual(note, welcomeNote(note.updatedAt));
+      return [['write', key.replace(/^note:/, '')]];
+    }
+    if (name === 'tabs.create') return [['open', arg.url]];
+    return [];
+  });
+
+  await t.test('a click writes a welcome note and then opens it', async () => {
+    const { els, calls, storage, warnings } = await runOptions();
+    calls.length = 0;
+    const before = Date.now();
+    els['welcome-note'].dispatch('click');
+    await settle();
+    const after = Date.now();
+    const got = opened(calls);
+    assert.equal(got.length, 2);
+    const id = got[0][1];
+    assert.match(id, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(got, [['write', id], ['open', noteUrl(noteBase, id)]]);
+    assert.deepEqual(Object.keys(storage), [`note:${id}`]);
+    const { updatedAt } = storage[`note:${id}`];
+    assert.ok(before <= updatedAt && updatedAt <= after, `updatedAt ${updatedAt} not in [${before}, ${after}]`);
+    assert.equal(els['welcome-status'].textContent, '');
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('a second click writes a new note under a different id', async () => {
+    const { els, storage } = await runOptions();
+    els['welcome-note'].dispatch('click');
+    await settle();
+    els['welcome-note'].dispatch('click');
+    await settle();
+    const keys = Object.keys(storage);
+    assert.equal(keys.length, 2);
+    assert.notEqual(keys[0], keys[1]);
+  });
+
+  await t.test('works after a failed settings load', async () => {
+    const { els, calls } = await runOptions({ reject: { 'storage.local.get': true } });
+    assert.equal(els['welcome-note'].disabled, undefined);
+    calls.length = 0;
+    els['welcome-note'].dispatch('click');
+    await settle();
+    const got = opened(calls);
+    assert.deepEqual(got.map(([what]) => what), ['write', 'open']);
+    assert.equal(got[1][1], noteUrl(noteBase, got[0][1]));
+  });
+
+  await t.test('works while the settings load is pending', async () => {
+    const { els, calls, releaseLoad } = await runOptions({ holdLoad: true });
+    calls.length = 0;
+    els['welcome-note'].dispatch('click');
+    await settle();
+    const got = opened(calls);
+    assert.deepEqual(got.map(([what]) => what), ['write', 'open']);
+    releaseLoad();
+    await settle();
+  });
+
+  await t.test('a failed write shows a message, logs and opens no tab', async () => {
+    const { els, calls, warnings } = await runOptions({ reject: { 'storage.local.set': true } });
+    calls.length = 0;
+    els['welcome-note'].dispatch('click');
+    await settle();
+    assert.deepEqual(calls.filter(([name]) => name === 'tabs.create'), []);
+    assert.equal(els['welcome-status'].textContent, 'Could not open the welcome note.');
+    assert.deepEqual(warnings.map((w) => [w[0], w[1].message]), [['tabnotes: write welcome note:', 'storage.local.set rejected']]);
+  });
+
+  await t.test('a failed tab open shows a message, logs and keeps the note', async () => {
+    const { els, storage, warnings } = await runOptions({ reject: { 'tabs.create': true } });
+    els['welcome-note'].dispatch('click');
+    await settle();
+    const [key] = Object.keys(storage);
+    assert.deepEqual(storage[key], welcomeNote(storage[key].updatedAt));
+    assert.equal(els['welcome-status'].textContent, 'Could not open the welcome note.');
+    assert.deepEqual(warnings.map((w) => [w[0], w[1].message]), [['tabnotes: open welcome note:', 'tabs.create rejected']]);
+  });
+
+  await t.test('the next click clears the message before its outcome', async () => {
+    const { els, warnings } = await runOptions({ reject: { 'storage.local.set': true } });
+    els['welcome-note'].dispatch('click');
+    await settle();
+    assert.equal(els['welcome-status'].textContent, 'Could not open the welcome note.');
+    els['welcome-note'].dispatch('click');
+    // the write is still in flight here
+    assert.equal(els['welcome-status'].textContent, '');
+    await settle();
+    assert.equal(els['welcome-status'].textContent, 'Could not open the welcome note.');
+    assert.equal(warnings.length, 2);
+  });
+
+  await t.test('a later successful click clears the message', async () => {
+    const reject = { 'storage.local.set': true };
+    const { els } = await runOptions({ reject });
+    els['welcome-note'].dispatch('click');
+    await settle();
+    assert.equal(els['welcome-status'].textContent, 'Could not open the welcome note.');
+    delete reject['storage.local.set'];
+    els['welcome-note'].dispatch('click');
+    await settle();
+    assert.equal(els['welcome-status'].textContent, '');
   });
 });
