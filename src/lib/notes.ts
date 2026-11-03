@@ -650,7 +650,9 @@ export function codeBlockHTML(
 export function previewExtension(highlight: (code: string, lang: string) => string | null): MarkedExtension {
   return {
     renderer: {
-      html: ({ text }) => escapeHTML(text),
+      // complete comments are hidden as a browser would; an unclosed one stays
+      // visible, so a typo cannot hide the rest of the note
+      html: ({ text }) => escapeHTML(text.replace(/<!--[\s\S]*?-->/g, '')),
       code: ({ text, lang }) => codeBlockHTML(text, lang, highlight),
       // marked's default is disabled; a click toggles the source, see toggleBox
       checkbox: ({ checked }) => `<input ${checked ? 'checked="" ' : ''}type="checkbox">`,

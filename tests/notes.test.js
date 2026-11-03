@@ -615,6 +615,20 @@ test('previewExtension', async (t) => {
     assert.equal(md.parseInline('<pre>a & b</pre> c'), '&lt;pre&gt;a &amp; b&lt;/pre&gt; c');
   });
 
+  await t.test('HTML comments are hidden, everything else stays escaped', () => {
+    const cases = [
+      { name: 'block comment', src: '<!-- hidden -->\n\ntext\n', want: '\n\n<p>text</p>\n' },
+      { name: 'multiline block comment', src: '<!--\nhidden\n-->\n\ntext\n', want: '\n\n<p>text</p>\n' },
+      { name: 'two comments in one block', src: '<!-- a --> <!-- b -->\n\ntext\n', want: ' \n\n<p>text</p>\n' },
+      { name: 'inline comment', src: 'a <!-- hidden --> b\n', want: '<p>a  b</p>\n' },
+      { name: 'comment next to a tag', src: '<!-- hidden --><b>x</b>\n', want: '&lt;b&gt;x&lt;/b&gt;\n' },
+      { name: 'unclosed comment stays visible', src: '<!-- open\n\ntext\n', want: '&lt;!-- open\n\ntext\n' },
+      { name: 'comment in a code span', src: '`<!-- kept -->`\n', want: '<p><code>&lt;!-- kept --&gt;</code></p>\n' },
+    ];
+    for (const c of cases) assert.equal(md.parse(c.src), c.want, c.name);
+    assert.match(md.parse('```\n<!-- kept -->\n```\n'), /&lt;!-- kept --&gt;/, 'comment in a fence');
+  });
+
   await t.test('values marked places itself stay inside their attributes', () => {
     const cases = [
       { name: 'link href', src: '[a](<x" onclick="y>)', want: /^<a href="x%22%20onclick=%22y">a<\/a>$/ },
