@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { noteIdFromUrl } = require('../src/lib/notes.ts');
+const { noteIdFromUrl, welcomeNote } = require('../src/lib/notes.ts');
 const { bundle } = require('./bundle.js');
 
 const script = bundle('src/background.ts');
@@ -24,12 +24,13 @@ const settle = () => new Promise((r) => setImmediate(r));
 // land a write the script has not seen, and after each tabs.query too. tabs is
 // what tabs.query returns, read at call time (a test closes a tab by splicing
 // it), and a function in reject decides by the call's arguments.
-async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tabs = [] } = {}) {
+async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tabs = [], installAtEval = null } = {}) {
   const warnings = [];
   const calls = [];
   const intervals = [];
   const clicks = [];
   const updates = [];
+  const installs = [];
   let now = NOW;
   // call records a browser API call and rejects when the test asked it to;
   // args are cloned into this realm so deepStrictEqual compares prototypes
@@ -49,6 +50,7 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tab
       runtime: {
         getURL: (p) => `moz-extension://uuid/${p}`,
         onUpdateAvailable: { addListener: (fn) => updates.push(fn) },
+        onInstalled: { addListener: (fn) => installs.push(fn) },
         reload: () => {
           calls.push(['runtime.reload']);
         },
@@ -90,6 +92,10 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tab
   script.runInContext(ctx);
   // counted before any await, so a listener added after one fails the test
   const updateListenersAtEval = updates.length;
+  const installedListenersAtEval = installs.length;
+  // installAtEval delivers onInstalled while the startup purge is in flight, as
+  // Firefox does
+  if (installAtEval) for (const fn of installs) fn(installAtEval);
   await settle();
   const click = async (tab) => {
     for (const fn of clicks) fn(tab);
@@ -98,6 +104,11 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tab
   // fireUpdate delivers runtime.onUpdateAvailable
   const fireUpdate = async () => {
     for (const fn of updates) fn();
+    await settle();
+  };
+  // fireInstalled delivers runtime.onInstalled with the given details
+  const fireInstalled = async (details) => {
+    for (const fn of installs) fn(details);
     await settle();
   };
   const of = (name) => calls.filter(([n]) => n === name);
@@ -111,7 +122,10 @@ async function runBackground({ storage = {}, reject = {}, onRead = () => {}, tab
   // sweepAt runs the 24h purge, closeSweepAt the 10-minute close sweep
   const sweepAt = (time) => fire(DAY_MS, time);
   const closeSweepAt = (time) => fire(CLOSE_SWEEP_MS, time);
-  return { warnings, calls, intervals, updateListenersAtEval, click, fireUpdate, of, sweepAt, closeSweepAt };
+  return {
+    warnings, calls, intervals, updateListenersAtEval, installedListenersAtEval,
+    click, fireUpdate, fireInstalled, of, sweepAt, closeSweepAt,
+  };
 }
 
 const note = (deletedAt) => ({ title: 'Notes', content: 'x', updatedAt: 1, deletedAt });
@@ -140,6 +154,82 @@ test('toolbar click', async (t) => {
     await click({ id: 7, index: 0 });
     assert.equal(warnings.length, 1);
     assert.equal(warnings[0][0], 'tabnotes: open note tab:');
+  });
+});
+
+test('welcome note on install', async (t) => {
+  const url = `moz-extension://uuid/note/note.html?id=${ID}`;
+
+  await t.test('the listener is registered when the bundle is evaluated', async () => {
+    const { installedListenersAtEval } = await runBackground();
+    assert.equal(installedListenersAtEval, 1);
+  });
+
+  await t.test('an install writes the welcome note, then opens it', async () => {
+    const storage = {};
+    const { fireInstalled, calls, warnings } = await runBackground({ storage });
+    calls.length = 0;
+    await fireInstalled({ reason: 'install', temporary: false });
+    assert.deepEqual(calls, [
+      ['storage.local.set', { [`note:${ID}`]: welcomeNote(NOW) }],
+      ['tabs.create', { url }],
+    ]);
+    assert.deepEqual(storage, { [`note:${ID}`]: welcomeNote(NOW) });
+    assert.deepEqual(warnings, []);
+  });
+
+  for (const details of [{ reason: 'update', previousVersion: '1.0.0' }, { reason: 'browser_update' }]) {
+    await t.test(`${details.reason} writes and opens nothing`, async () => {
+      const storage = {};
+      const { fireInstalled, calls, warnings } = await runBackground({ storage });
+      calls.length = 0;
+      await fireInstalled(details);
+      assert.deepEqual(calls, []);
+      assert.deepEqual(storage, {});
+      assert.deepEqual(warnings, []);
+    });
+  }
+
+  await t.test('a failed write is logged and opens no tab', async () => {
+    const { fireInstalled, of, warnings } = await runBackground({ reject: { 'storage.local.set': true } });
+    await fireInstalled({ reason: 'install' });
+    assert.deepEqual(warnings.map(([what, err]) => [what, err.message]), [
+      ['tabnotes: write welcome note:', 'storage.local.set rejected'],
+    ]);
+    assert.deepEqual(of('tabs.create'), []);
+  });
+
+  await t.test('a failed tab open is logged and the note stays in storage', async () => {
+    const storage = {};
+    const { fireInstalled, warnings } = await runBackground({ storage, reject: { 'tabs.create': true } });
+    await fireInstalled({ reason: 'install' });
+    assert.deepEqual(warnings.map(([what, err]) => [what, err.message]), [
+      ['tabnotes: open welcome note:', 'tabs.create rejected'],
+    ]);
+    assert.deepEqual(storage, { [`note:${ID}`]: welcomeNote(NOW) });
+  });
+
+  await t.test('an install during the startup purge keeps the note and writes no map', async () => {
+    const storage = { [`note:${ID2}`]: note(null) };
+    const { of, warnings } = await runBackground({ storage, installAtEval: { reason: 'install' } });
+    assert.equal(of('storage.local.getKeys').length, 1);
+    assert.deepEqual(storage, { [`note:${ID2}`]: note(null), [`note:${ID}`]: welcomeNote(NOW) });
+    assert.deepEqual(of('storage.local.set'), [['storage.local.set', { [`note:${ID}`]: welcomeNote(NOW) }]]);
+    assert.deepEqual(of('storage.local.remove'), []);
+    assert.deepEqual(of('tabs.create'), [['tabs.create', { url }]]);
+    assert.deepEqual(warnings, []);
+  });
+
+  await t.test('the close sweep and the purge leave it alone, as it is permanent', async () => {
+    const storage = {};
+    const { fireInstalled, closeSweepAt, sweepAt, of, warnings } = await runBackground({ storage });
+    await fireInstalled({ reason: 'install' });
+    await closeSweepAt(NOW + CLOSE_SWEEP_MS);
+    await sweepAt(NOW + DAY_MS);
+    assert.deepEqual(storage, { [`note:${ID}`]: welcomeNote(NOW) });
+    assert.deepEqual(of('storage.local.set'), [['storage.local.set', { [`note:${ID}`]: welcomeNote(NOW) }]]);
+    assert.deepEqual(of('storage.local.remove'), []);
+    assert.deepEqual(warnings, []);
   });
 });
 

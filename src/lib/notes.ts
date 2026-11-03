@@ -258,6 +258,61 @@ const IMAGE_MIME_RE = new RegExp(`^image/(${IMAGE_EXT})$`);
 export const STORAGE_FULL_HINT = `Storage may be full, and deleted images free space only after ${IMAGE_GRACE_DAYS} days.`;
 // KIND_HINT is the tooltip of the kind button on the note page
 export const KIND_HINT = `Temporary notes move to the Bin after ${TEMPORARY_DAYS} days closed and are deleted ${EXPIRED_BIN_DAYS} days later. Click to switch.`;
+// WELCOME_TITLE is the title of the welcome note
+export const WELCOME_TITLE = 'Welcome to tabnotes';
+// WELCOME_TEXT is the content of the note opened on first install and from
+// Settings. It holds no URL (the static scan covers src/) and no raw HTML,
+// which the preview shows escaped.
+export const WELCOME_TEXT = `# Welcome to tabnotes
+
+Each tab holds one note. It is saved as you type and stays in this Firefox profile: nothing leaves your computer.
+
+## Try it
+
+- [ ] Tick this box
+- [ ] Press \`Ctrl+E\` (\`Cmd+E\` on macOS) to switch between both panes, the editor only and the preview only
+- [ ] Click the title above to rename this note; a template like \`{date}\` fills in the date
+- [ ] Click **Permanent** in the header to make this note temporary, and again to switch it back
+- [ ] Open **All notes** in the header to find every note, open or closed
+
+Hover over a code block to copy it:
+
+\`\`\`js
+const note = { title: 'Groceries', content: '- [ ] milk' };
+console.log(note.title);
+\`\`\`
+
+## Permanent and temporary notes
+
+A permanent note stays until you delete it. A temporary note moves to the Bin once it has been closed for ${TEMPORARY_DAYS} days. The Bin keeps notes for ${BIN_DAYS} days, or ${EXPIRED_BIN_DAYS} days for a temporary note that got there by itself, then deletes them.
+
+\`\`\`mermaid
+flowchart LR
+  open[Open in a tab] -->|close the tab| closed[Closed]
+  closed -->|reopen| open
+  closed -->|temporary, ${TEMPORARY_DAYS} days| bin[Bin]
+  open -->|Move to Bin| bin
+  bin -->|Restore in All notes| closed
+  bin -->|Restore in its tab| open
+  bin -->|${BIN_DAYS} or ${EXPIRED_BIN_DAYS} days| deleted[Deleted]
+\`\`\`
+
+## Images
+
+Drop or paste an image into the editor. It is stored with your notes.
+
+## All notes and Settings
+
+**All notes** lists open, recently closed and other notes, and the Bin, and can export notes to a zip and import them back. **Settings** sets the title template, the kind of notes the toolbar button creates, the theme and the font size, and **Open the welcome note** there brings this note back.
+
+## Pin the button
+
+Firefox may offer to pin the tabnotes button right after install. Otherwise it is in the Extensions menu (the puzzle piece in the toolbar): click the gear next to tabnotes and choose **Pin to Toolbar**.
+
+## Before you remove tabnotes
+
+Removing tabnotes deletes its notes. Export them first, from All notes or Settings.
+`;
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
 // idAfter returns the id following prefix in s, or null if s is anything else
@@ -323,6 +378,10 @@ export function notesFromStorage(stored: Record<string, unknown>): Record<string
 export function newNote(title: string, now: number, temporary: boolean): LiveNote {
   const note: LiveNote = { title, content: '', updatedAt: now, deletedAt: null };
   return temporary ? { ...note, temporary: true } : note;
+}
+
+export function welcomeNote(now: number): LiveNote {
+  return { ...newNote(WELCOME_TITLE, now, false), content: WELCOME_TEXT };
 }
 
 // edit returns the edited note, or null when the note should be removed:

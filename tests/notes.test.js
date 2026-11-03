@@ -11,7 +11,7 @@ const {
   MAX_IMAGE_BYTES, imageKey, idFromImageKey, imageLabel, checkImageFiles, pasteIsText, STORAGE_FULL_HINT, imageMarkdown, imageRefs,
   referencedImages, storedImageIds, countText,
   imageIdFromHref, imageHTML, sweepImages, withoutReferenced, orphansAfterFailedRemove, sameFirstSeen,
-  titleVars, expandTitle, TITLE_HINT, KIND_HINT,
+  titleVars, expandTitle, TITLE_HINT, KIND_HINT, WELCOME_TITLE, WELCOME_TEXT, welcomeNote,
   setTemporary, trashClosed, temporaryFromUrl, sweepClosed, stillDue, closedAfterFailedWrite, closedDaysLeft, closedDaysLeftText,
   noteFile, parseNoteFile, fileNames,
   imageExt, imageFromPath, zipPath, exportLinks, importLinks, dataUrlBytes, bytesDataUrl,
@@ -2372,4 +2372,57 @@ test('zipFits', async (t) => {
   for (const [name, entries, want] of cases) {
     await t.test(name, () => assert.equal(zipFits(entries), want));
   }
+});
+
+test('welcomeNote is a permanent live note holding the welcome text', () => {
+  const note = welcomeNote(1000);
+  assert.deepEqual(note, { title: WELCOME_TITLE, content: WELCOME_TEXT, updatedAt: 1000, deletedAt: null });
+  assert.equal('temporary' in note, false);
+});
+
+test('WELCOME_TEXT', async (t) => {
+  const tokens = marked.lexer(WELCOME_TEXT);
+  const walk = (list, out = []) => {
+    for (const tok of list ?? []) {
+      out.push(tok);
+      walk(tok.tokens, out);
+      walk(tok.items, out);
+    }
+    return out;
+  };
+  const all = walk(tokens);
+  const tasks = all.filter((tok) => tok.type === 'list_item' && tok.task);
+
+  await t.test('renders its tasks, a diagram and a code block', () => {
+    const html = new Marked(previewExtension(() => null)).parse(WELCOME_TEXT);
+    assert.ok(tasks.length >= 3);
+    assert.equal(html.split('<input').length - 1, tasks.length);
+    assert.equal(html.split('<pre class="mermaid">').length - 1, 1);
+    assert.match(html, /<div class="code-block">[\s\S]*?<button[^>]*class="copy"/);
+  });
+
+  await t.test('every task can be ticked', () => {
+    const offsets = taskOffsets(WELCOME_TEXT, (src) => marked.lexer(src));
+    assert.notEqual(offsets, null);
+    assert.equal(offsets.length, tasks.length);
+    assert.ok(offsets.every((o) => o !== null));
+  });
+
+  await t.test('holds no raw HTML', () => {
+    assert.deepEqual(all.filter((tok) => tok.type === 'html'), []);
+  });
+
+  await t.test('holds no URL', () => {
+    assert.doesNotMatch(WELCOME_TEXT, /https?:\/\/|\/\/[a-z0-9.-]+\.[a-z]{2,}\/|www\./i);
+  });
+
+  await t.test('states the days and the essentials', () => {
+    assert.match(WELCOME_TEXT, /closed for 30 days/);
+    assert.match(WELCOME_TEXT, /keeps notes for 30 days/);
+    assert.match(WELCOME_TEXT, /7 days/);
+    assert.match(WELCOME_TEXT, /`Ctrl\+E`/);
+    assert.match(WELCOME_TEXT, /All notes/);
+    assert.match(WELCOME_TEXT, /[Ee]xport/);
+    assert.match(WELCOME_TEXT, /[Rr]emoving tabnotes deletes its notes/);
+  });
 });

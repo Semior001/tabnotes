@@ -1,12 +1,13 @@
 // Background script: the toolbar button opens a new note tab under the
-// current tab, binned notes past their bin days are purged, images no note
-// references are swept, temporary notes closed for too long are binned, and
-// an add-on update waits until no tabnotes page is open.
+// current tab, a first install writes and opens the welcome note, binned
+// notes past their bin days are purged, images no note references are swept,
+// temporary notes closed for too long are binned, and an add-on update waits
+// until no tabnotes page is open.
 
 import {
   noteUrl, notesFromStorage, storageKey, idFromStorageKey, expired, imageKey, sweepImages,
   withoutReferenced, orphansAfterFailedRemove, sameFirstSeen, noteIdFromUrl, sweepClosed,
-  closedAfterFailedWrite, stillDue, trashClosed, type ImageOrphans, type ClosedNotes,
+  closedAfterFailedWrite, stillDue, trashClosed, welcomeNote, type ImageOrphans, type ClosedNotes,
 } from './lib/notes.ts';
 
 (function () {
@@ -30,6 +31,18 @@ import {
     const url = noteUrl(noteBase, crypto.randomUUID());
     const props = { url, openerTabId: tab.id, windowId: tab.windowId, index: tab.index + 1 };
     browser.tabs.create(props).catch(warn('open note tab'));
+  });
+
+  // registered at once: Firefox delivers onInstalled only to a listener present
+  // when the page starts. The note is written first, as a tab opened on a failed
+  // write would show an empty note; update and browser_update open nothing, and
+  // the update reload restarts as an update, never an install.
+  browser.runtime.onInstalled.addListener(({ reason }) => {
+    if (reason !== 'install') return;
+    const id = crypto.randomUUID();
+    browser.storage.local.set({ [storageKey(id)]: welcomeNote(Date.now()) })
+      .then(() => browser.tabs.create({ url: noteUrl(noteBase, id) }).catch(warn('open welcome note')))
+      .catch(warn('write welcome note'));
   });
 
   let updatePending = false;
